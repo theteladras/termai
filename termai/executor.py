@@ -30,6 +30,7 @@ def preview_and_execute(
     ctx: "SessionContext",
     *,
     dry_run: bool = False,
+    auto_yes: bool = False,
     instruction: str = "",
 ) -> bool | None:
     """Show a command preview, run safety checks, and optionally execute.
@@ -54,19 +55,30 @@ def preview_and_execute(
         print(f"\n  {CYAN}(dry-run mode — command will NOT be executed){RESET}")
         return None
 
-    print()
-    if any(w.severity == "critical" for w in warnings):
-        prompt = f"  {RED}Type the full word 'execute' to confirm:{RESET} "
-        answer = input(prompt).strip().lower()
-        if answer != "execute":
-            print("[termai] Command cancelled.")
-            return None
+    # -y / --yes: skip confirmation, but still block critical commands
+    if auto_yes:
+        if any(w.severity == "critical" for w in warnings):
+            print(f"\n  {RED}--yes cannot override critical safety warnings.{RESET}")
+            prompt = f"  {RED}Type the full word 'execute' to confirm:{RESET} "
+            answer = input(prompt).strip().lower()
+            if answer != "execute":
+                print("[termai] Command cancelled.")
+                return None
+        # non-critical: proceed directly
     else:
-        prompt_suffix = " (dangerous!) " if warnings else " "
-        answer = input(f"Execute this command?{prompt_suffix}[y/N] ").strip().lower()
-        if answer not in ("y", "yes"):
-            print("[termai] Command cancelled.")
-            return None
+        print()
+        if any(w.severity == "critical" for w in warnings):
+            prompt = f"  {RED}Type the full word 'execute' to confirm:{RESET} "
+            answer = input(prompt).strip().lower()
+            if answer != "execute":
+                print("[termai] Command cancelled.")
+                return None
+        else:
+            prompt_suffix = " (dangerous!) " if warnings else " "
+            answer = input(f"Execute this command?{prompt_suffix}[y/N] ").strip().lower()
+            if answer not in ("y", "yes"):
+                print("[termai] Command cancelled.")
+                return None
 
     registry = get_registry()
     command = registry.run_pre_hooks(command, ctx)

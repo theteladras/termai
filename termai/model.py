@@ -40,18 +40,28 @@ class LocalModel:
             from gpt4all import GPT4All  # type: ignore[import-untyped]
 
             MODEL_DIR.mkdir(parents=True, exist_ok=True)
+
+            model_file = MODEL_DIR / self._model_name
+            if not model_file.exists():
+                self._available = False
+                print(
+                    f"\033[0;33m[termai] No local model found at {model_file}\033[0m\n"
+                    "[termai] Using rule-based fallback (works offline, no download).\n"
+                    "[termai] To download a model, run:\n"
+                    f"[termai]   termai --download-model\n"
+                )
+                return
+
             self._model = GPT4All(
                 self._model_name,
                 model_path=str(MODEL_DIR),
                 device=self._device,
-                allow_download=True,
+                allow_download=False,
             )
         except Exception as e:
             self._available = False
             print(
                 f"\033[0;33m[termai] Could not load model '{self._model_name}': {e}\033[0m\n"
-                "[termai] Install gpt4all (`pip install gpt4all`) and ensure "
-                "you have enough RAM.\n"
                 "[termai] Falling back to rule-based command generation.\n"
             )
 
@@ -114,3 +124,25 @@ class LocalModel:
                         repeat_penalty=1.1,
                     )
         return response.strip()
+
+
+def download_model(model_name: str | None = None) -> None:
+    """Interactively download a model via GPT4All."""
+    cfg = get_config()
+    name = model_name or cfg.model
+
+    print(f"\033[1;36m[termai] Downloading model: {name}\033[0m")
+    print(f"[termai] Destination: {MODEL_DIR}")
+    print(f"[termai] This may take a few minutes depending on your connection.\n")
+
+    try:
+        from gpt4all import GPT4All  # type: ignore[import-untyped]
+
+        MODEL_DIR.mkdir(parents=True, exist_ok=True)
+        GPT4All(name, model_path=str(MODEL_DIR), allow_download=True)
+        print(f"\n\033[1;32m[termai] Model '{name}' is ready!\033[0m")
+
+    except KeyboardInterrupt:
+        print(f"\n\033[0;33m[termai] Download cancelled.\033[0m")
+    except Exception as e:
+        print(f"\n\033[1;31m[termai] Download failed: {e}\033[0m")

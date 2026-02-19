@@ -28,6 +28,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Start interactive chat mode",
     )
     parser.add_argument(
+        "-y", "--yes",
+        action="store_true",
+        help="Skip confirmation and execute immediately",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Preview the generated command without executing",
@@ -51,6 +56,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Device to run the model on (default: cpu)",
     )
     parser.add_argument(
+        "--download-model",
+        action="store_true",
+        help="Download the AI model (run once, ~2 GB)",
+    )
+    parser.add_argument(
         "--init-config",
         action="store_true",
         help="Write a default config file to ~/.termai/config.toml",
@@ -71,7 +81,14 @@ def main() -> None:
         from termai.config import Config
         cfg = Config()
         cfg.write_default()
-        print(f"[termai] Config written to ~/.termai/config.toml")
+        print("[termai] Config written to ~/.termai/config.toml")
+        return
+
+    if args.download_model:
+        if args.model:
+            os.environ["TERMAI_MODEL"] = args.model
+        from termai.model import download_model
+        download_model(model_name=args.model)
         return
 
     if args.history is not None:
@@ -101,6 +118,7 @@ def main() -> None:
             command,
             ctx,
             dry_run=args.dry_run,
+            auto_yes=args.yes,
             instruction=args.instruction,
         )
 
