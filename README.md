@@ -301,6 +301,41 @@ pip install -e ".[dev]"
 pytest
 ```
 
+## Contributing
+
+Contributions are welcome! Here's how to get started:
+
+1. **Fork** the repository and clone your fork
+2. **Create a branch** for your feature or fix: `git checkout -b my-feature`
+3. **Install dev dependencies**: `pip install -e ".[dev]"`
+4. **Make your changes** — keep commits focused and descriptive
+5. **Run the linter and tests** before submitting:
+   ```bash
+   ruff check termai/
+   pytest
+   ```
+6. **Open a pull request** against `main` with a clear description of what you changed and why
+
+### Guidelines
+
+- Follow the existing code style (enforced by [Ruff](https://docs.astral.sh/ruff/))
+- Keep PRs small and focused — one feature or fix per PR
+- Add tests for new functionality when possible
+- Update the README if you're adding user-facing features or changing CLI flags
+- Don't commit secrets, API keys, or model files
+- Be respectful and constructive in discussions
+
+### Ideas for Contributions
+
+- New fallback command mappings in `generator.py`
+- Additional safety patterns in `safety.py`
+- Plugins — share useful ones in `examples/`
+- Support for new local model backends
+- Improved context gathering (Docker, Kubernetes, cloud CLIs)
+- Translations or documentation improvements
+
+If you're unsure about an idea, open an issue first to discuss it.
+
 ## License
 
 MIT
