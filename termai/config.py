@@ -12,6 +12,14 @@ Supported config keys (in [termai] section):
   temperature = 0.2
   log_file    = "~/.termai/history.jsonl"
   plugin_dir  = "~/.termai/plugins"
+
+Remote AI keys (in [remote] section):
+  provider        = ""         # "openai" | "claude" | ""
+  model           = ""         # e.g. "gpt-4o-mini", "claude-sonnet-4-20250514"
+  openai_api_key  = ""
+  claude_api_key  = ""
+  max_tokens      = 512
+  timeout         = 30
 """
 
 from __future__ import annotations
@@ -32,6 +40,14 @@ class Config:
     temperature: float = 0.2
     log_file: Path = field(default_factory=lambda: CONFIG_DIR / "history.jsonl")
     plugin_dir: Path = field(default_factory=lambda: CONFIG_DIR / "plugins")
+
+    # Remote AI provider settings
+    remote_provider: str = ""
+    remote_model: str = ""
+    openai_api_key: str = ""
+    claude_api_key: str = ""
+    remote_max_tokens: int = 512
+    remote_timeout: int = 30
 
     @classmethod
     def load(cls) -> "Config":
@@ -74,6 +90,20 @@ class Config:
         if "plugin_dir" in section:
             self.plugin_dir = Path(section["plugin_dir"]).expanduser()
 
+        remote = data.get("remote", {})
+        if "provider" in remote:
+            self.remote_provider = str(remote["provider"])
+        if "model" in remote:
+            self.remote_model = str(remote["model"])
+        if "openai_api_key" in remote:
+            self.openai_api_key = str(remote["openai_api_key"])
+        if "claude_api_key" in remote:
+            self.claude_api_key = str(remote["claude_api_key"])
+        if "max_tokens" in remote:
+            self.remote_max_tokens = int(remote["max_tokens"])
+        if "timeout" in remote:
+            self.remote_timeout = int(remote["timeout"])
+
     def _apply_env_overrides(self) -> None:
         if v := os.environ.get("TERMAI_MODEL"):
             self.model = v
@@ -83,6 +113,12 @@ class Config:
             self.max_tokens = int(v)
         if v := os.environ.get("TERMAI_PLUGIN_DIR"):
             self.plugin_dir = Path(v)
+        if v := os.environ.get("TERMAI_REMOTE_PROVIDER"):
+            self.remote_provider = v
+        if v := (os.environ.get("OPENAI_API_KEY") or os.environ.get("TERMAI_OPENAI_KEY")):
+            self.openai_api_key = v
+        if v := (os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("TERMAI_CLAUDE_KEY")):
+            self.claude_api_key = v
 
     def write_default(self) -> None:
         """Write a default config file if one doesn't exist."""

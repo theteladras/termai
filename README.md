@@ -26,7 +26,9 @@ We spend too much time looking up commands we've forgotten, piecing together fla
 - **Allow list** — approve commands once, per-session, or permanently; manage via GUI or terminal
 - **Context-aware** — knows your OS, shell, cwd, git branch, package manager, and recent commands
 - **Interactive chat mode** — multi-turn conversation in your terminal with `/help`, `/history`, `/context`, `/clear`
-- **Offline operation** — uses a local LLM (GPT4All: Phi-3, Mistral, LLaMA) with automatic fallback
+- **Hybrid AI** — local LLM handles simple tasks instantly; complex tasks are delegated to OpenAI or Claude when configured
+- **Parallel execution** — independent commands run simultaneously for faster results
+- **Offline-first** — works fully offline with a local LLM (GPT4All: Phi-3, Mistral, LLaMA); remote AI is always optional
 - **Standalone executable** — single-file binary for macOS, Linux, and Windows (no Python required)
 - **Browser-based GUI** — setup wizard and settings dashboard that opens in your browser, zero dependencies
 - **Command logging** — full audit trail in `~/.termai/history.jsonl`
@@ -88,6 +90,9 @@ termai --model Mistral-7B-...      # use a specific model for this run
 termai --device gpu                # run model on GPU
 termai --init-config               # create default config file
 termai --uninstall                 # remove binaries, config, and models
+termai --remote                    # force remote AI for this run
+termai --local                     # force local-only AI for this run
+termai --provider openai           # override remote provider for this run
 ```
 
 `tai` works as a short alias for `termai`:
@@ -134,8 +139,9 @@ termai --settings     # opens in your browser
 termai includes a browser-based GUI with zero dependencies — no Tkinter, no Electron, just Python's built-in HTTP server opening a page in your default browser.
 
 - **Setup wizard** — first-run experience with model selection and download progress
-- **Settings dashboard** — four tabs:
+- **Settings dashboard** — five tabs:
   - **Models** — switch active model, download new ones, see which are installed
+  - **Remote AI** — configure OpenAI/Claude API keys, select remote model, test connection
   - **Allow List** — view/add/remove custom allowed commands, toggle built-in safe commands on/off
   - **History** — browse, filter, and clear your prompt history
   - **Config** — view current settings
@@ -145,6 +151,65 @@ The GUI auto-launches when running the standalone executable with no arguments (
 ```bash
 termai                # opens the setup wizard (default when no args)
 termai --settings     # go straight to the settings dashboard
+```
+
+## Remote AI (Optional)
+
+termai works fully offline by default. Optionally, connect OpenAI or Claude for complex tasks — the local model handles simple commands instantly, and only delegates when needed.
+
+### Setup
+
+Configure via the settings dashboard or manually in `~/.termai/config.toml`:
+
+```toml
+[remote]
+provider = "openai"          # "openai" or "claude"
+model = "gpt-4o-mini"        # see model options below
+openai_api_key = "sk-..."
+```
+
+Or set environment variables:
+
+```bash
+export OPENAI_API_KEY="sk-..."
+export TERMAI_REMOTE_PROVIDER="openai"
+# or
+export ANTHROPIC_API_KEY="sk-ant-..."
+export TERMAI_REMOTE_PROVIDER="claude"
+```
+
+### How Delegation Works
+
+1. Local model generates a command first (instant, free, private)
+2. A complexity classifier evaluates the instruction
+3. Simple tasks (list files, check status) use the local result
+4. Complex tasks (multi-step scripts, Kubernetes, Terraform) are delegated to the remote provider
+5. If the remote provider fails, the local result is used as fallback with a warning
+
+### Available Remote Models
+
+| Provider | Model | Description |
+|---|---|---|
+| OpenAI | `gpt-4o-mini` | Fast and affordable (default) |
+| OpenAI | `gpt-4o` | Most capable |
+| OpenAI | `gpt-4.1-mini` | Latest mini model |
+| OpenAI | `gpt-4.1` | Latest flagship |
+| Claude | `claude-sonnet-4-20250514` | Balanced speed and quality (default) |
+| Claude | `claude-haiku-3-5-20241022` | Fast and affordable |
+| Claude | `claude-opus-4-20250514` | Most capable |
+
+### CLI Overrides
+
+```bash
+termai --remote "complex task"       # force remote AI for this instruction
+termai --local "simple task"         # force local-only, ignore remote config
+termai --provider claude "task"      # use Claude instead of configured provider
+```
+
+Install the optional dependencies to use remote AI:
+
+```bash
+pip install -e ".[remote]"           # installs openai + anthropic SDKs
 ```
 
 ## Model Setup
@@ -204,7 +269,7 @@ max_tokens = 256
 temperature = 0.2
 ```
 
-Environment variables override config: `TERMAI_MODEL`, `TERMAI_DEVICE`, `TERMAI_MAX_TOKENS`, `TERMAI_PLUGIN_DIR`.
+Environment variables override config: `TERMAI_MODEL`, `TERMAI_DEVICE`, `TERMAI_MAX_TOKENS`, `TERMAI_PLUGIN_DIR`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `TERMAI_REMOTE_PROVIDER`.
 
 Additional data files in `~/.termai/`:
 
@@ -286,8 +351,10 @@ termai/
 ├── installer.py     # Terminal-based installation wizard
 ├── gui.py           # Browser-based GUI (wizard + settings dashboard)
 ├── uninstaller.py   # Uninstall wizard
-├── generator.py     # Natural language → shell command
-├── executor.py      # Command preview, safety checks, execution
+├── remote.py        # Remote AI providers (OpenAI, Claude)
+├── classifier.py    # Complexity classifier for local vs remote delegation
+├── generator.py     # Natural language → shell command (local + remote)
+├── executor.py      # Command preview, safety checks, parallel execution
 ├── safety.py        # Destructive command detection & warnings
 ├── allowlist.py     # Three-tier command allow list management
 ├── chat.py          # Interactive chat REPL

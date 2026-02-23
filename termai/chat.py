@@ -11,7 +11,7 @@ import re
 from typing import TYPE_CHECKING
 
 from termai.model import LocalModel
-from termai.executor import preview_and_execute
+from termai.executor import preview_and_execute, preview_and_execute_batch
 from termai.plugins import get_registry
 
 if TYPE_CHECKING:
@@ -20,6 +20,7 @@ if TYPE_CHECKING:
 BOLD = "\033[1m"
 CYAN = "\033[1;36m"
 GREEN = "\033[1;32m"
+YELLOW = "\033[0;33m"
 MAGENTA = "\033[1;35m"
 DIM = "\033[2m"
 RESET = "\033[0m"
@@ -86,8 +87,10 @@ def interactive_chat(ctx: "SessionContext") -> None:
             commands = _extract_commands(response)
             if commands:
                 _display_response_text(response, exclude_fences=True)
-                for cmd in commands:
-                    preview_and_execute(cmd, ctx)
+                if len(commands) > 1:
+                    preview_and_execute_batch(commands, ctx)
+                else:
+                    preview_and_execute(commands[0], ctx)
             else:
                 _display_response_text(response)
 
@@ -141,18 +144,55 @@ def _get_response(
     model: LocalModel,
     messages: list[dict[str, str]],
 ) -> str:
-    """Generate a response using the AI model or a simple fallback."""
-    system = CHAT_SYSTEM_PROMPT + "\n--- System Context ---\n" + ctx.summary() + "\n--- End Context ---"
+    """Generate a response using the AI model or a simple fallback.
 
+    Tries the local model first, then delegates to a remote provider
+    if configured and the query appears complex.
+    """
+    system = CHAT_SYSTEM_PROMPT + "\n--- System Context ---\n" + ctx.summary() + "\n--- End Context ---"
+    all_messages = messages + [{"role": "user", "content": user_input}]
+
+    from termai.generator import _force_mode
+    from termai.remote import get_remote_provider
+    from termai.classifier import classify
+
+    if _force_mode == "remote":
+        remote = get_remote_provider()
+        if remote and remote.is_available():
+            return _try_remote_chat(remote, system, all_messages, user_input)
+
+    local_result = None
     if model.is_available:
-        all_messages = messages + [{"role": "user", "content": user_input}]
         raw = model.chat_generate(system, all_messages, max_tokens=512)
-        # Strip leaked system context that small models sometimes echo back
         if "--- System Context ---" in raw:
             raw = raw[:raw.index("--- System Context ---")].strip()
-        return raw
+        local_result = raw
 
-    return _chat_fallback(user_input)
+    if _force_mode == "local":
+        return local_result or _chat_fallback(user_input)
+
+    remote = get_remote_provider()
+    if remote and remote.is_available():
+        decision = classify(user_input, local_result, from_fallback=not model.is_available)
+        if decision == "remote":
+            remote_result = _try_remote_chat(remote, system, all_messages, user_input)
+            if remote_result:
+                return remote_result
+
+    return local_result or _chat_fallback(user_input)
+
+
+def _try_remote_chat(remote, system: str, messages: list[dict[str, str]], user_input: str) -> str | None:
+    """Attempt to get a response from the remote AI provider."""
+    print(f"  {CYAN}[remote]{RESET} {DIM}Processing...{RESET}")
+    try:
+        raw = remote.chat_generate(system, messages, max_tokens=512)
+        if raw:
+            print(f"  {CYAN}[remote]{RESET} {DIM}Response from remote AI{RESET}")
+            return raw
+    except Exception as e:
+        print(f"  {YELLOW}[remote]{RESET} {DIM}Remote AI failed: {e}{RESET}")
+    return None
 
 
 def _chat_fallback(user_input: str) -> str:

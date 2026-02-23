@@ -331,6 +331,7 @@ def _build_html(mode: str = "auto") -> str:
 
   <div class="tab-bar">
     <button class="tab-btn active" onclick="switchTab('models', this)">Models</button>
+    <button class="tab-btn" onclick="switchTab('remote', this)">Remote AI</button>
     <button class="tab-btn" onclick="switchTab('allowlist', this)">Allow List</button>
     <button class="tab-btn" onclick="switchTab('history', this)">History</button>
     <button class="tab-btn" onclick="switchTab('config', this)">Config</button>
@@ -341,6 +342,56 @@ def _build_html(mode: str = "auto") -> str:
     <h2>AI Models</h2>
     <div class="subtitle">Switch your active model or download a new one.</div>
     <div id="settings-model-list"></div>
+  </div>
+
+  <!-- Tab: Remote AI -->
+  <div class="tab-content" id="tab-remote">
+    <h2>Remote AI</h2>
+    <div class="subtitle">Connect to OpenAI or Claude for complex tasks. Local AI handles simple ones, remote handles the rest.</div>
+
+    <div class="card" style="margin-bottom:16px">
+      <div style="font-weight:600;margin-bottom:12px">Provider</div>
+      <div style="display:flex;gap:8px;margin-bottom:16px">
+        <button class="btn btn-secondary btn-sm" id="rp-none" onclick="setRemoteProvider('')">None (local only)</button>
+        <button class="btn btn-secondary btn-sm" id="rp-openai" onclick="setRemoteProvider('openai')">OpenAI</button>
+        <button class="btn btn-secondary btn-sm" id="rp-claude" onclick="setRemoteProvider('claude')">Claude</button>
+      </div>
+
+      <div id="remote-openai-cfg" style="display:none">
+        <div style="font-weight:600;margin-bottom:8px">OpenAI API Key</div>
+        <div class="add-row" style="margin-bottom:12px">
+          <input type="password" class="add-input" id="openai-key-input" placeholder="sk-..." />
+        </div>
+        <div style="font-weight:600;margin-bottom:8px">Model</div>
+        <select id="openai-model-select" class="add-input" style="width:auto;margin-bottom:12px">
+          <option value="gpt-4o-mini">GPT-4o Mini (fast, affordable)</option>
+          <option value="gpt-4o">GPT-4o (most capable)</option>
+          <option value="gpt-4.1-mini">GPT-4.1 Mini (latest mini)</option>
+          <option value="gpt-4.1">GPT-4.1 (latest flagship)</option>
+        </select>
+      </div>
+
+      <div id="remote-claude-cfg" style="display:none">
+        <div style="font-weight:600;margin-bottom:8px">Claude API Key</div>
+        <div class="add-row" style="margin-bottom:12px">
+          <input type="password" class="add-input" id="claude-key-input" placeholder="sk-ant-..." />
+        </div>
+        <div style="font-weight:600;margin-bottom:8px">Model</div>
+        <select id="claude-model-select" class="add-input" style="width:auto;margin-bottom:12px">
+          <option value="claude-sonnet-4-20250514">Claude Sonnet 4 (balanced)</option>
+          <option value="claude-haiku-3-5-20241022">Claude 3.5 Haiku (fast)</option>
+          <option value="claude-opus-4-20250514">Claude Opus 4 (most capable)</option>
+        </select>
+      </div>
+
+      <div style="display:flex;gap:8px;align-items:center">
+        <button class="btn btn-primary btn-sm" onclick="saveRemoteConfig()">Save</button>
+        <button class="btn btn-secondary btn-sm" onclick="testRemoteConnection()">Test Connection</button>
+        <span id="remote-status" style="font-size:13px"></span>
+      </div>
+    </div>
+
+    <div class="subtitle">How it works: local AI handles simple commands instantly. When a complex task is detected, it's delegated to the remote provider. If the remote provider fails, the local result is used as fallback.</div>
   </div>
 
   <!-- Tab: Allow List -->
@@ -432,6 +483,7 @@ function switchTab(name, btn) {{
   document.getElementById('tab-' + name).classList.add('active');
   btn.classList.add('active');
   if (name === 'history') renderHistory();
+  if (name === 'remote') loadRemoteConfig();
 }}
 
 function toast(msg) {{
@@ -609,6 +661,74 @@ function renderConfig() {{
   }});
 }}
 
+// ---- Remote AI ----
+let currentRemoteProvider = '';
+
+function loadRemoteConfig() {{
+  fetch('/api/remote-config').then(r => r.json()).then(cfg => {{
+    currentRemoteProvider = cfg.provider || '';
+    updateProviderButtons(currentRemoteProvider);
+    if (cfg.openai_api_key) document.getElementById('openai-key-input').value = cfg.openai_api_key;
+    if (cfg.claude_api_key) document.getElementById('claude-key-input').value = cfg.claude_api_key;
+    if (cfg.remote_model) {{
+      const oSel = document.getElementById('openai-model-select');
+      const cSel = document.getElementById('claude-model-select');
+      if (currentRemoteProvider === 'openai') oSel.value = cfg.remote_model;
+      if (currentRemoteProvider === 'claude') cSel.value = cfg.remote_model;
+    }}
+  }}).catch(() => {{}});
+}}
+
+function setRemoteProvider(provider) {{
+  currentRemoteProvider = provider;
+  updateProviderButtons(provider);
+}}
+
+function updateProviderButtons(provider) {{
+  ['none', 'openai', 'claude'].forEach(p => {{
+    const btn = document.getElementById('rp-' + p);
+    const val = p === 'none' ? '' : p;
+    btn.className = 'btn btn-sm ' + (val === provider ? 'btn-primary' : 'btn-secondary');
+  }});
+  document.getElementById('remote-openai-cfg').style.display = provider === 'openai' ? 'block' : 'none';
+  document.getElementById('remote-claude-cfg').style.display = provider === 'claude' ? 'block' : 'none';
+  document.getElementById('remote-status').textContent = '';
+}}
+
+function saveRemoteConfig() {{
+  const data = {{
+    provider: currentRemoteProvider,
+    openai_api_key: document.getElementById('openai-key-input').value.trim(),
+    claude_api_key: document.getElementById('claude-key-input').value.trim(),
+    remote_model: currentRemoteProvider === 'openai'
+      ? document.getElementById('openai-model-select').value
+      : currentRemoteProvider === 'claude'
+        ? document.getElementById('claude-model-select').value
+        : '',
+  }};
+  fetch('/api/remote-config', {{
+    method: 'POST',
+    headers: {{'Content-Type':'application/json'}},
+    body: JSON.stringify(data)
+  }}).then(r => r.json()).then(res => {{
+    if (res.ok) toast('Remote AI settings saved');
+    else toast('Error saving: ' + (res.error || 'unknown'));
+  }});
+}}
+
+function testRemoteConnection() {{
+  const status = document.getElementById('remote-status');
+  status.textContent = 'Testing...';
+  status.style.color = 'var(--fg-dim)';
+  fetch('/api/remote-test', {{ method: 'POST' }}).then(r => r.json()).then(res => {{
+    status.textContent = res.ok ? '✓ ' + res.message : '✗ ' + res.message;
+    status.style.color = res.ok ? 'var(--green)' : 'var(--red)';
+  }}).catch(() => {{
+    status.textContent = '✗ Request failed';
+    status.style.color = 'var(--red)';
+  }});
+}}
+
 // ---- History ----
 let historyCache = null;
 async function loadHistory(limit) {{
@@ -687,7 +807,22 @@ class _WizardHandler(BaseHTTPRequestHandler):
             cfg = get_config()
             data = {"model": cfg.model, "device": cfg.device,
                     "max_tokens": cfg.max_tokens, "temperature": cfg.temperature,
+                    "remote_provider": cfg.remote_provider,
+                    "remote_model": cfg.remote_model,
                     "config_file": str(CONFIG_FILE)}
+            self._respond(200, "application/json", json.dumps(data).encode())
+        elif self.path == "/api/remote-config":
+            cfg = get_config()
+            masked_openai = _mask_key(cfg.openai_api_key)
+            masked_claude = _mask_key(cfg.claude_api_key)
+            data = {
+                "provider": cfg.remote_provider,
+                "remote_model": cfg.remote_model,
+                "openai_api_key": masked_openai,
+                "claude_api_key": masked_claude,
+                "has_openai_key": bool(cfg.openai_api_key),
+                "has_claude_key": bool(cfg.claude_api_key),
+            }
             self._respond(200, "application/json", json.dumps(data).encode())
         elif self.path.startswith("/api/history"):
             from urllib.parse import urlparse, parse_qs
@@ -761,6 +896,15 @@ class _WizardHandler(BaseHTTPRequestHandler):
             if cmd:
                 enable_safe_command(cmd)
             self._respond(200, "application/json", b'{"ok":true}')
+
+        elif self.path == "/api/remote-config":
+            _save_remote_config(body)
+            self._respond(200, "application/json", b'{"ok":true}')
+
+        elif self.path == "/api/remote-test":
+            ok, msg = _test_remote_connection()
+            self._respond(200, "application/json",
+                          json.dumps({"ok": ok, "message": msg}).encode())
 
         elif self.path == "/api/history/clear":
             from termai.logger import LOG_FILE
@@ -1008,6 +1152,76 @@ def _do_setup_config() -> None:
     plugins_dir = CONFIG_DIR / "plugins"
     plugins_dir.mkdir(exist_ok=True)
     _log("Plugin directory ready", "ok")
+
+
+# -- Remote AI helpers ---------------------------------------------------------
+
+def _mask_key(key: str) -> str:
+    """Mask an API key for display, showing only last 4 chars."""
+    if not key or len(key) < 8:
+        return ""
+    return "•" * (len(key) - 4) + key[-4:]
+
+
+def _save_remote_config(data: dict) -> None:
+    """Write remote AI settings to config.toml."""
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+
+    provider = data.get("provider", "")
+    remote_model = data.get("remote_model", "")
+    openai_key = data.get("openai_api_key", "")
+    claude_key = data.get("claude_api_key", "")
+
+    # Don't overwrite keys with masked values
+    cfg = get_config()
+    if openai_key and openai_key.startswith("•"):
+        openai_key = cfg.openai_api_key
+    if claude_key and claude_key.startswith("•"):
+        claude_key = cfg.claude_api_key
+
+    if CONFIG_FILE.exists():
+        content = CONFIG_FILE.read_text()
+    else:
+        content = "[termai]\n"
+
+    # Remove existing [remote] section if present
+    import re as _re
+    content = _re.sub(r"\n?\[remote\][^\[]*", "", content)
+
+    if provider:
+        remote_section = f"\n[remote]\nprovider = \"{provider}\"\nmodel = \"{remote_model}\"\n"
+        if openai_key:
+            remote_section += f'openai_api_key = "{openai_key}"\n'
+        if claude_key:
+            remote_section += f'claude_api_key = "{claude_key}"\n'
+        content = content.rstrip() + "\n" + remote_section
+
+    CONFIG_FILE.write_text(content)
+
+    # Reset cached config so changes take effect
+    import termai.config as _cfg
+    _cfg._config = None
+
+    from termai.remote import reset_remote_provider
+    reset_remote_provider()
+
+
+def _test_remote_connection() -> tuple[bool, str]:
+    """Test the current remote AI configuration."""
+    # Reload config first
+    import termai.config as _cfg
+    _cfg._config = None
+
+    from termai.remote import reset_remote_provider, get_remote_provider
+    reset_remote_provider()
+    remote = get_remote_provider()
+
+    if not remote:
+        return False, "No remote provider configured"
+    if not remote.is_available():
+        return False, "API key missing"
+
+    return remote.test_connection()
 
 
 # -- Entry point --------------------------------------------------------------

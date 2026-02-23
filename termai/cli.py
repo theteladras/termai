@@ -91,6 +91,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="Remove termai binaries, config, and optionally downloaded models",
     )
     parser.add_argument(
+        "--remote",
+        action="store_true",
+        help="Force remote AI for this run (requires configured API key)",
+    )
+    parser.add_argument(
+        "--local",
+        action="store_true",
+        help="Force local-only AI for this run (ignore remote config)",
+    )
+    parser.add_argument(
+        "--provider",
+        choices=["openai", "claude"],
+        help="Override the remote AI provider for this run",
+    )
+    parser.add_argument(
         "--version",
         action="version",
         version=f"%(prog)s {__version__}",
@@ -159,6 +174,14 @@ def main() -> None:
         os.environ["TERMAI_MODEL"] = args.model
     if args.device:
         os.environ["TERMAI_DEVICE"] = args.device
+    if args.provider:
+        os.environ["TERMAI_REMOTE_PROVIDER"] = args.provider
+
+    from termai.generator import set_force_mode
+    if args.remote:
+        set_force_mode("remote")
+    elif args.local:
+        set_force_mode("local")
 
     ctx = SessionContext()
 
