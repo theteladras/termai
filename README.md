@@ -26,8 +26,10 @@ We spend too much time looking up commands we've forgotten, piecing together fla
 - **Allow list** — approve commands once, per-session, or permanently; manage via GUI or terminal
 - **Context-aware** — knows your OS, shell, cwd, git branch, package manager, and recent commands
 - **Interactive chat mode** — multi-turn conversation in your terminal with `/help`, `/history`, `/context`, `/clear`
+- **AI orchestrator** — complex multi-step requests are decomposed into a dependency-aware execution plan with parallel waves
 - **Hybrid AI** — local LLM handles simple tasks instantly; complex tasks are delegated to OpenAI or Claude when configured
 - **Parallel execution** — independent commands run simultaneously for faster results
+- **Process history** — full lifecycle tracking per task (prompt, AI provider, steps, timing, status) in GUI and terminal
 - **Offline-first** — works fully offline with a local LLM (GPT4All: Phi-3, Mistral, LLaMA); remote AI is always optional
 - **Standalone executable** — single-file binary for macOS, Linux, and Windows (no Python required)
 - **Browser-based GUI** — setup wizard and settings dashboard that opens in your browser, zero dependencies
@@ -77,6 +79,8 @@ termai --dry-run "instruction"     # preview only, don't execute
 termai --chat                      # interactive chat mode
 termai --history                   # show recent command history
 termai --history 50                # show last 50 commands
+termai --processes                 # show multi-step process history
+termai --processes 10              # show last 10 processes
 ```
 
 ### Setup & Configuration
@@ -134,16 +138,74 @@ Manage allow lists and built-in safe commands via the settings dashboard:
 termai --settings     # opens in your browser
 ```
 
+## AI Orchestrator
+
+When an instruction requires multiple steps, termai automatically detects this and uses the AI to create a structured execution plan:
+
+```
+tai "create a python project called api-service, set up a venv, install flask and pytest, init git"
+```
+
+The orchestrator will:
+
+1. **Decompose** the request into atomic shell commands
+2. **Identify dependencies** between steps (which must wait for others)
+3. **Group independent steps** into parallel execution waves
+4. **Execute** wave by wave with real-time feedback
+
+```
+  ╭─ Execution Plan ─────────────────────────────
+  │  "create a python project, set up venv, install flask and pytest, init git"
+  │  5 steps • 3 waves • remote/OpenAIProvider
+  ├────────────────────────────────────────────────
+  │  Wave 1
+  │    1. mkdir api-service
+  │  Wave 2 (parallel)
+  │    2. cd api-service && python3 -m venv venv
+  │    3. cd api-service && git init
+  │  Wave 3 (parallel)
+  │    4. cd api-service && venv/bin/pip install flask
+  │    5. cd api-service && venv/bin/pip install pytest
+  ╰────────────────────────────────────────────────
+
+  Execute plan? [y/N] y
+
+  ▸ Wave 1/3
+    ✓ 1. mkdir api-service (50ms)
+
+  ▸ Wave 2/3 (parallel)
+    ✓ 2. python3 -m venv venv (3.2s)
+    ✓ 3. git init (80ms)
+
+  ▸ Wave 3/3 (parallel)
+    ✓ 4. pip install flask (5.1s)
+    ✓ 5. pip install pytest (4.8s)
+
+  ════════════════════════════════════════════════
+  Plan completed: 5/5 steps succeeded (13.3s)
+  ════════════════════════════════════════════════
+```
+
+Every process is logged with full details. View past processes via:
+
+```bash
+termai --processes       # terminal view
+termai --settings        # GUI Processes tab
+```
+
+In chat mode, use `/processes` to view recent process history.
+
 ## GUI
 
 termai includes a browser-based GUI with zero dependencies — no Tkinter, no Electron, just Python's built-in HTTP server opening a page in your default browser.
 
 - **Setup wizard** — first-run experience with model selection and download progress
-- **Settings dashboard** — five tabs:
+- **Settings dashboard** — six tabs:
   - **Models** — switch active model, download new ones, see which are installed
   - **Remote AI** — configure OpenAI/Claude API keys, select remote model, test connection
   - **Allow List** — view/add/remove custom allowed commands, toggle built-in safe commands on/off
   - **History** — browse, filter, and clear your prompt history
+  - **Processes** — view multi-step orchestrated tasks with step details, timing, and AI info
   - **Config** — view current settings
 
 The GUI auto-launches when running the standalone executable with no arguments (or double-clicking it). From the terminal:
@@ -354,6 +416,8 @@ termai/
 ├── remote.py        # Remote AI providers (OpenAI, Claude)
 ├── classifier.py    # Complexity classifier for local vs remote delegation
 ├── generator.py     # Natural language → shell command (local + remote)
+├── orchestrator.py  # Multi-step task decomposition, wave execution, plan logging
+├── process_log.py   # Process-level history (prompt → plan → step results)
 ├── executor.py      # Command preview, safety checks, parallel execution
 ├── safety.py        # Destructive command detection & warnings
 ├── allowlist.py     # Three-tier command allow list management
@@ -404,6 +468,16 @@ Contributions are welcome! Here's how to get started:
 - Translations or documentation improvements
 
 If you're unsure about an idea, open an issue first to discuss it.
+
+## Roadmap
+
+Planned features and improvements:
+
+- **Web search integration** — optional web fetching to look up documentation, correct install commands, and current best practices before generating commands. Useful when the AI lacks knowledge about newer tools or needs to verify version-specific instructions. Will be privacy-respecting (only activates when explicitly triggered or when remote AI is already configured).
+- File reading and analysis support
+- Natural language cron job scheduling
+- Command explanation mode (`tai --explain "awk '{print $2}'"`)
+- Team-shared allow lists and config profiles
 
 ## License
 

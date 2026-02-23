@@ -68,6 +68,16 @@ def main() -> None:
         "--noconfirm",
     ]
 
+    for pkg in ("openai", "anthropic", "httpx", "httpcore", "anyio",
+                "pydantic", "pydantic_core", "jiter", "sniffio", "h11",
+                "distro", "docstring_parser", "annotated_types",
+                "typing_inspection", "typing_extensions"):
+        try:
+            __import__(pkg)
+            cmd.extend(["--hidden-import", pkg])
+        except ImportError:
+            pass
+
     if args.bundle_model:
         model_path = MODEL_DIR / BUNDLE_MODEL
         if not model_path.exists():

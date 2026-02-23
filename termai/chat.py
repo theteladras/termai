@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 
 from termai.model import LocalModel
 from termai.executor import preview_and_execute, preview_and_execute_batch
+from termai.orchestrator import is_multistep, generate_plan, execute_plan
 from termai.plugins import get_registry
 
 if TYPE_CHECKING:
@@ -46,6 +47,7 @@ HELP_TEXT = f"""
   {BOLD}Slash commands:{RESET}
     /help      Show this help message
     /history   Show session command history
+    /processes Show recent multi-step process history
     /context   Show current system context
     /clear     Clear conversation history
     exit       Quit interactive mode
@@ -88,7 +90,11 @@ def interactive_chat(ctx: "SessionContext") -> None:
             if commands:
                 _display_response_text(response, exclude_fences=True)
                 if len(commands) > 1:
-                    preview_and_execute_batch(commands, ctx)
+                    plan = generate_plan(user_input, ctx)
+                    if plan and len(plan.steps) > 1:
+                        execute_plan(plan, ctx)
+                    else:
+                        preview_and_execute_batch(commands, ctx)
                 else:
                     preview_and_execute(commands[0], ctx)
             else:
@@ -120,6 +126,10 @@ def _handle_slash_command(
             for i, entry in enumerate(ctx.history, 1):
                 print(f"  {DIM}{i}.{RESET} {entry}")
         print()
+
+    elif cmd == "/processes":
+        from termai.process_log import print_processes
+        print_processes(limit=10)
 
     elif cmd == "/context":
         print(f"\n{DIM}{ctx.summary()}{RESET}\n")

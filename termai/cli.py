@@ -10,6 +10,8 @@ from termai.context import SessionContext
 from termai.chat import interactive_chat
 from termai.executor import preview_and_execute
 from termai.logger import print_history
+from termai.orchestrator import is_multistep, generate_plan, execute_plan
+from termai.process_log import print_processes
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -84,6 +86,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--init-config",
         action="store_true",
         help="Write a default config file to ~/.termai/config.toml",
+    )
+    parser.add_argument(
+        "--processes",
+        nargs="?",
+        const=20,
+        type=int,
+        metavar="N",
+        help="Show recent multi-step process history (default: last 20)",
     )
     parser.add_argument(
         "--uninstall",
@@ -170,6 +180,10 @@ def main() -> None:
         print_history(limit=args.history)
         return
 
+    if args.processes is not None:
+        print_processes(limit=args.processes)
+        return
+
     if args.model:
         os.environ["TERMAI_MODEL"] = args.model
     if args.device:
@@ -192,6 +206,13 @@ def main() -> None:
     if not args.instruction:
         parser.print_help()
         sys.exit(1)
+
+    if is_multistep(args.instruction):
+        plan = generate_plan(args.instruction, ctx)
+        if plan and len(plan.steps) > 1:
+            execute_plan(plan, ctx,
+                         dry_run=args.dry_run, auto_yes=args.yes)
+            return
 
     command = generate_command(args.instruction, ctx)
     if command:

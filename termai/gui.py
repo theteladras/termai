@@ -229,6 +229,41 @@ h2 { font-size: 20px; font-weight: 600; margin-bottom: 12px; }
 .history-controls select:focus { border-color: var(--accent); }
 .history-empty { color: var(--fg-dim); font-size: 14px; padding: 20px 0; text-align: center; }
 
+/* Processes */
+.process-item {
+  background: var(--bg-card); border: 1px solid var(--accent-dim);
+  border-radius: 8px; padding: 14px 16px; margin-bottom: 10px;
+}
+.process-item .proc-header {
+  display: flex; align-items: center; gap: 10px; margin-bottom: 6px; cursor: pointer;
+}
+.process-item .proc-instruction {
+  font-size: 14px; font-weight: 600; color: var(--fg); flex: 1;
+}
+.process-item .proc-badge {
+  font-size: 11px; padding: 2px 8px; border-radius: 10px; font-weight: 600;
+}
+.proc-badge.completed { background: rgba(52,199,89,.15); color: var(--green); }
+.proc-badge.partial { background: rgba(255,204,0,.15); color: var(--yellow); }
+.proc-badge.failed { background: rgba(255,59,48,.15); color: var(--red); }
+.proc-badge.cancelled { background: rgba(150,150,150,.15); color: var(--fg-dim); }
+.process-item .proc-meta {
+  color: var(--fg-dim); font-size: 11px; display: flex; gap: 14px; margin-bottom: 8px;
+}
+.process-item .proc-steps { display: none; margin-top: 10px; }
+.process-item.expanded .proc-steps { display: block; }
+.process-item .proc-step {
+  display: flex; align-items: baseline; gap: 8px; padding: 4px 0;
+  font-size: 13px; border-top: 1px solid var(--accent-dim);
+}
+.process-item .proc-step:first-child { border-top: none; }
+.proc-step .step-cmd {
+  font-family: 'SF Mono', Menlo, Consolas, monospace; color: var(--accent); flex: 1;
+}
+.proc-step .step-desc { color: var(--fg-dim); font-size: 11px; }
+.proc-step .step-dur { color: var(--fg-dim); font-size: 11px; white-space: nowrap; }
+.proc-expand { color: var(--fg-dim); font-size: 12px; cursor: pointer; user-select: none; }
+
 .toast {
   position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
   background: var(--green); color: var(--bg-input); padding: 10px 24px;
@@ -334,6 +369,7 @@ def _build_html(mode: str = "auto") -> str:
     <button class="tab-btn" onclick="switchTab('remote', this)">Remote AI</button>
     <button class="tab-btn" onclick="switchTab('allowlist', this)">Allow List</button>
     <button class="tab-btn" onclick="switchTab('history', this)">History</button>
+    <button class="tab-btn" onclick="switchTab('processes', this)">Processes</button>
     <button class="tab-btn" onclick="switchTab('config', this)">Config</button>
   </div>
 
@@ -440,6 +476,29 @@ def _build_html(mode: str = "auto") -> str:
     <div id="history-list"></div>
   </div>
 
+  <!-- Tab: Processes -->
+  <div class="tab-content" id="tab-processes">
+    <h2>Process History</h2>
+    <div class="subtitle">Multi-step orchestrated tasks — prompt, AI, steps, and results.</div>
+    <div class="history-controls">
+      <select id="proc-limit" onchange="renderProcesses()">
+        <option value="20">Last 20</option>
+        <option value="50">Last 50</option>
+        <option value="100">Last 100</option>
+      </select>
+      <select id="proc-filter" onchange="renderProcesses()">
+        <option value="all">All</option>
+        <option value="completed">Completed</option>
+        <option value="partial">Partial</option>
+        <option value="failed">Failed</option>
+      </select>
+      <div style="flex:1"></div>
+      <button class="btn btn-secondary btn-sm" onclick="renderProcesses()">Refresh</button>
+      <button class="btn btn-secondary btn-sm" style="color:var(--red);border-color:var(--red)" onclick="clearProcesses()">Clear All</button>
+    </div>
+    <div id="proc-list"></div>
+  </div>
+
   <!-- Tab: Config -->
   <div class="tab-content" id="tab-config">
     <h2>Configuration</h2>
@@ -483,6 +542,7 @@ function switchTab(name, btn) {{
   document.getElementById('tab-' + name).classList.add('active');
   btn.classList.add('active');
   if (name === 'history') renderHistory();
+  if (name === 'processes') renderProcesses();
   if (name === 'remote') loadRemoteConfig();
 }}
 
@@ -771,14 +831,83 @@ async function clearHistory() {{
   renderHistory();
 }}
 
+// ---- Processes ----
+let processCache = null;
+async function loadProcesses(limit) {{
+  const r = await fetch('/api/processes?limit=' + limit);
+  processCache = await r.json();
+}}
+async function renderProcesses() {{
+  const limit = document.getElementById('proc-limit').value;
+  const filter = document.getElementById('proc-filter').value;
+  await loadProcesses(limit);
+  let items = processCache || [];
+  if (filter !== 'all') items = items.filter(e => e.status === filter);
+  const container = document.getElementById('proc-list');
+  if (!items.length) {{
+    container.innerHTML = '<div class="history-empty">No process history found.</div>';
+    return;
+  }}
+  container.innerHTML = items.slice().reverse().map((p, idx) => {{
+    const ts = (p.timestamp || '').slice(0, 19).replace('T', ' ');
+    const steps = p.steps || [];
+    const succeeded = steps.filter(s => s.status === 'success').length;
+    const total = steps.length;
+    const dur = p.total_duration_ms != null
+      ? (p.total_duration_ms >= 1000 ? (p.total_duration_ms/1000).toFixed(1) + 's' : p.total_duration_ms + 'ms')
+      : '';
+    const badgeCls = p.status || 'unknown';
+    const statusLabel = p.status || '?';
+    const ai = p.ai_provider || '?';
+    const pid = p.id || '?';
+
+    const stepsHtml = steps.map(s => {{
+      const sIcon = s.status === 'success' ? '<span style="color:var(--green)">✓</span>'
+        : s.status === 'failed' ? '<span style="color:var(--red)">✗</span>'
+        : s.status === 'skipped' ? '<span style="color:var(--yellow)">⊘</span>'
+        : '<span style="color:var(--fg-dim)">?</span>';
+      const sDur = s.duration_ms != null
+        ? (s.duration_ms >= 1000 ? (s.duration_ms/1000).toFixed(1) + 's' : s.duration_ms + 'ms')
+        : '';
+      return `<div class="proc-step">
+        ${{sIcon}}
+        <span class="step-cmd">${{s.command || '?'}}</span>
+        ${{s.description ? `<span class="step-desc">${{s.description}}</span>` : ''}}
+        <span class="step-dur">${{sDur}}</span>
+      </div>`;
+    }}).join('');
+
+    return `<div class="process-item" id="proc-${{idx}}">
+      <div class="proc-header" onclick="document.getElementById('proc-${{idx}}').classList.toggle('expanded')">
+        <span class="proc-expand">▸</span>
+        <span class="proc-instruction">${{p.instruction || '?'}}</span>
+        <span class="proc-badge ${{badgeCls}}">${{statusLabel}}</span>
+      </div>
+      <div class="proc-meta">
+        <span>${{ts}}</span>
+        <span>${{ai}}</span>
+        <span>${{succeeded}}/${{total}} steps</span>
+        <span>${{dur}}</span>
+        <span style="opacity:.5">${{pid}}</span>
+      </div>
+      <div class="proc-steps">${{stepsHtml}}</div>
+    </div>`;
+  }}).join('');
+}}
+async function clearProcesses() {{
+  if (!confirm('Clear all process history? This cannot be undone.')) return;
+  await fetch('/api/processes/clear', {{method:'POST'}});
+  toast('Process history cleared');
+  renderProcesses();
+}}
+
 // ---- Add-input enter key ----
 document.addEventListener('keydown', e => {{
   if (e.key === 'Enter' && document.activeElement && document.activeElement.id === 'add-cmd-input') addAllowedCmd();
 }});
 
-// Heartbeat + cleanup
-setInterval(() => fetch('/api/heartbeat').catch(() => {{}}), 3000);
-window.addEventListener('beforeunload', () => navigator.sendBeacon('/api/shutdown'));
+// Heartbeat (watchdog detects disconnection; no automatic shutdown on refresh)
+setInterval(() => fetch('/api/heartbeat').catch(() => {{}}), 2000);
 </script>
 </body>
 </html>"""
@@ -830,6 +959,13 @@ class _WizardHandler(BaseHTTPRequestHandler):
             limit = int(qs.get("limit", ["50"])[0])
             from termai.logger import read_history
             entries = read_history(limit)
+            self._respond(200, "application/json", json.dumps(entries).encode())
+        elif self.path.startswith("/api/processes"):
+            from urllib.parse import urlparse, parse_qs
+            qs = parse_qs(urlparse(self.path).query)
+            limit = int(qs.get("limit", ["20"])[0])
+            from termai.process_log import read_processes
+            entries = read_processes(limit)
             self._respond(200, "application/json", json.dumps(entries).encode())
         elif self.path == "/api/safe-commands":
             self._respond(200, "application/json", json.dumps(get_safe_commands()).encode())
@@ -914,6 +1050,11 @@ class _WizardHandler(BaseHTTPRequestHandler):
                 pass
             self._respond(200, "application/json", b'{"ok":true}')
 
+        elif self.path == "/api/processes/clear":
+            from termai.process_log import clear_processes
+            clear_processes()
+            self._respond(200, "application/json", b'{"ok":true}')
+
         elif self.path == "/api/shutdown":
             self._respond(200, "text/plain", b"bye")
             threading.Thread(target=self._shutdown, daemon=True).start()
@@ -935,7 +1076,9 @@ class _WizardHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _shutdown(self) -> None:
-        time.sleep(0.3)
+        time.sleep(2)
+        if _download_state.get("active") and not _download_state.get("done") and not _download_state.get("error"):
+            return
         if self.server_ref:
             self.server_ref.shutdown()
 
@@ -1227,12 +1370,18 @@ def _test_remote_connection() -> tuple[bool, str]:
 # -- Entry point --------------------------------------------------------------
 
 def _heartbeat_watchdog(server: HTTPServer, handler_cls: type) -> None:
+    missed = 0
     while True:
         time.sleep(5)
         if _download_state.get("active") and not _download_state.get("done") and not _download_state.get("error"):
+            missed = 0
             continue
         last = handler_cls.last_heartbeat
-        if last > 0 and (time.monotonic() - last) > 15:
+        if last > 0 and (time.monotonic() - last) > 10:
+            missed += 1
+        else:
+            missed = 0
+        if missed >= 6:
             print("[termai] Browser disconnected — shutting down.")
             server.shutdown()
             return
@@ -1300,9 +1449,17 @@ def run_gui_wizard(mode: str = "auto") -> None:
         "html_page": page,
         "last_heartbeat": time.monotonic(),
     })
-    server = HTTPServer(("127.0.0.1", 0), handler)
+    _PORT = 49152
+    for port in range(_PORT, _PORT + 20):
+        try:
+            server = HTTPServer(("127.0.0.1", port), handler)
+            break
+        except OSError:
+            continue
+    else:
+        server = HTTPServer(("127.0.0.1", 0), handler)
+        port = server.server_address[1]
     handler.server_ref = server
-    port = server.server_address[1]
     url = f"http://127.0.0.1:{port}"
 
     threading.Thread(target=_heartbeat_watchdog, args=(server, handler), daemon=True).start()
