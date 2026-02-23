@@ -4,14 +4,17 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "termai"
-version = "0.1.0"
+version = "0.2.0"
 description = "Local AI-powered terminal assistant"
 readme = "README.md"
 requires-python = ">=3.10"
-license = {text = "MIT"}
+license = "MIT"
 dependencies = [
     "gpt4all>=2.6.0",
 ]
+
+[tool.setuptools.packages.find]
+include = ["termai*"]
 
 [project.optional-dependencies]
 remote = [
