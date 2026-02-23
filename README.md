@@ -4,6 +4,8 @@
 
 # Termai
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 A local AI-powered terminal assistant that converts natural language into shell commands — safely.
 
 ## Motivation
