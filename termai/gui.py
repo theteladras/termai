@@ -1238,6 +1238,56 @@ def _heartbeat_watchdog(server: HTTPServer, handler_cls: type) -> None:
             return
 
 
+def _open_app_window(url: str) -> None:
+    """Open URL in an app-like window (no URL bar, tabs, or bookmarks).
+
+    Tries Chromium-based browsers with --app flag first, then falls back
+    to the default browser.
+    """
+    import subprocess as _sp
+
+    candidates: list[tuple[str, list[str]]] = []
+
+    if platform.system() == "Darwin":
+        candidates = [
+            ("Google Chrome", [
+                "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+                f"--app={url}", "--new-window",
+            ]),
+            ("Chromium", [
+                "/Applications/Chromium.app/Contents/MacOS/Chromium",
+                f"--app={url}", "--new-window",
+            ]),
+            ("Microsoft Edge", [
+                "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+                f"--app={url}", "--new-window",
+            ]),
+            ("Brave", [
+                "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+                f"--app={url}", "--new-window",
+            ]),
+        ]
+    elif platform.system() == "Windows":
+        candidates = [
+            ("Chrome", ["cmd", "/c", "start", "chrome", f"--app={url}"]),
+            ("Edge", ["cmd", "/c", "start", "msedge", f"--app={url}"]),
+        ]
+    else:
+        for name in ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "microsoft-edge"):
+            path = shutil.which(name)
+            if path:
+                candidates.append((name, [path, f"--app={url}", "--new-window"]))
+
+    for name, cmd in candidates:
+        try:
+            _sp.Popen(cmd, stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
+            return
+        except (FileNotFoundError, OSError):
+            continue
+
+    webbrowser.open(url)
+
+
 def run_gui_wizard(mode: str = "auto") -> None:
     """Launch the browser-based UI.
 
@@ -1259,6 +1309,6 @@ def run_gui_wizard(mode: str = "auto") -> None:
 
     label = "settings" if (mode == "settings" or (mode == "auto" and _is_installed())) else "setup wizard"
     print(f"[termai] Opening {label} at {url}")
-    webbrowser.open(url)
+    _open_app_window(url)
     server.serve_forever()
     print("[termai] Closed.")
