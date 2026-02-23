@@ -146,7 +146,11 @@ def _get_response(
 
     if model.is_available:
         all_messages = messages + [{"role": "user", "content": user_input}]
-        return model.chat_generate(system, all_messages, max_tokens=512)
+        raw = model.chat_generate(system, all_messages, max_tokens=512)
+        # Strip leaked system context that small models sometimes echo back
+        if "--- System Context ---" in raw:
+            raw = raw[:raw.index("--- System Context ---")].strip()
+        return raw
 
     return _chat_fallback(user_input)
 

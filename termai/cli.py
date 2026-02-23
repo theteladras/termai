@@ -56,6 +56,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Device to run the model on (default: cpu)",
     )
     parser.add_argument(
+        "--install",
+        action="store_true",
+        help="Full installation wizard (terminal) — install binary, pick a model, configure",
+    )
+    parser.add_argument(
+        "--gui",
+        action="store_true",
+        help="Launch the graphical installation wizard",
+    )
+    parser.add_argument(
         "--setup",
         action="store_true",
         help="Interactive model selector — pick and download a local AI model",
@@ -78,9 +88,31 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _should_auto_gui() -> bool:
+    """Return True if we're a frozen exe launched with no args."""
+    if not getattr(sys, "frozen", False):
+        return False
+    return len(sys.argv) <= 1
+
+
 def main() -> None:
+    if _should_auto_gui():
+        from termai.gui import run_gui_wizard
+        run_gui_wizard()
+        return
+
     parser = build_parser()
     args = parser.parse_args()
+
+    if args.gui:
+        from termai.gui import run_gui_wizard
+        run_gui_wizard()
+        return
+
+    if args.install:
+        from termai.installer import run_install_wizard
+        run_install_wizard()
+        return
 
     if args.setup:
         from termai.models import interactive_setup

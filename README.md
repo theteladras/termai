@@ -23,28 +23,28 @@ Download the latest binary from [Releases](../../releases) for your platform —
 ```bash
 # macOS / Linux
 chmod +x termai
-./termai --setup       # pick and download an AI model
-./termai "list files"  # start using it
+./termai --install     # full wizard: installs binary, picks a model, configures
 ```
+
+The installation wizard will:
+1. Copy `termai` to `/usr/local/bin` (with sudo if needed)
+2. Create the `tai` shortcut alias
+3. Let you pick and download an AI model
+4. Set up the config file
+
+After that, just use `termai` or `tai` from anywhere.
 
 ### Option 2: Install from source
 
 ```bash
 pip install -e .
-
-# Or use the install script (adds shell aliases too)
-bash scripts/install.sh
-```
-
-Then set up a model:
-
-```bash
-termai --setup
+termai --install       # run the wizard
 ```
 
 ## Usage
 
 ```
+termai --install                   # full installation wizard
 termai "your instruction"          # generate & preview a command
 termai -y "your instruction"       # skip confirmation, execute immediately
 termai --dry-run "instruction"     # preview only
@@ -136,6 +136,33 @@ python build.py --bundle-model
 
 Builds are also automated via GitHub Actions — push a `v*` tag to create a release with binaries for all platforms.
 
+### Testing the executable locally
+
+If you have termai installed via pip and want to switch to the standalone executable:
+
+```bash
+# 1. Uninstall the pip version
+pip uninstall termai -y
+
+# 2. Build the executable
+python build.py --clean
+
+# 3. Test it
+./dist/termai --version
+./dist/termai --setup
+./dist/termai -y "list files"
+
+# 4. (Optional) Copy to PATH for global access
+sudo cp dist/termai /usr/local/bin/termai
+sudo cp dist/termai /usr/local/bin/tai
+```
+
+To go back to the development version:
+
+```bash
+pip install -e .
+```
+
 ## Plugins
 
 Place Python files in `~/.termai/plugins/`. Each must define a `register(registry)` function:
@@ -165,6 +192,7 @@ termai/
 ├── context.py       # Session context (OS, shell, cwd, git, env)
 ├── model.py         # Local LLM wrapper (GPT4All)
 ├── models.py        # Model catalog and interactive selector
+├── installer.py     # Full installation wizard
 ├── generator.py     # Natural language → shell command
 ├── executor.py      # Command preview, safety checks, execution
 ├── safety.py        # Destructive command detection & warnings

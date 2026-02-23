@@ -3,6 +3,8 @@
 Every generated command goes through preview_and_execute(), which shows
 the user what will run, checks for destructive patterns, asks for explicit
 confirmation, then executes via subprocess and logs the result.
+
+Harmless commands and user-approved commands skip the prompt entirely.
 """
 
 from __future__ import annotations
@@ -12,6 +14,7 @@ import sys
 from typing import TYPE_CHECKING
 
 from termai.safety import check_command, format_warnings
+from termai.allowlist import should_auto_execute, add_to_session, add_to_permanent
 from termai.logger import log_command
 from termai.plugins import get_registry
 
@@ -20,7 +23,9 @@ if TYPE_CHECKING:
 
 CYAN = "\033[1;36m"
 GREEN = "\033[1;32m"
+YELLOW = "\033[0;33m"
 RED = "\033[1;31m"
+BOLD = "\033[1m"
 DIM = "\033[2m"
 RESET = "\033[0m"
 
@@ -55,34 +60,70 @@ def preview_and_execute(
         print(f"\n  {CYAN}(dry-run mode — command will NOT be executed){RESET}")
         return None
 
-    # -y / --yes: skip confirmation, but still block critical commands
-    if auto_yes:
-        if any(w.severity == "critical" for w in warnings):
-            print(f"\n  {RED}--yes cannot override critical safety warnings.{RESET}")
-            prompt = f"  {RED}Type the full word 'execute' to confirm:{RESET} "
+    # Auto-execute safe / allowed commands (unless they have safety warnings)
+    if not warnings and (auto_yes or should_auto_execute(command)):
+        print(f"  {DIM}(auto-approved){RESET}")
+        registry = get_registry()
+        command = registry.run_pre_hooks(command, ctx)
+        return run_command(command, ctx, instruction=instruction)
+
+    # Critical warnings always require typing "execute"
+    if any(w.severity == "critical" for w in warnings):
+        print(f"\n  {RED}This command is critically dangerous.{RESET}")
+        prompt = f"  {RED}Type 'execute' to confirm:{RESET} "
+        try:
             answer = input(prompt).strip().lower()
-            if answer != "execute":
-                print("[termai] Command cancelled.")
-                return None
-        # non-critical: proceed directly
+        except (KeyboardInterrupt, EOFError):
+            print(f"\n  {DIM}Cancelled.{RESET}")
+            return None
+        if answer != "execute":
+            print(f"  {DIM}Cancelled.{RESET}")
+            return None
     else:
-        print()
-        if any(w.severity == "critical" for w in warnings):
-            prompt = f"  {RED}Type the full word 'execute' to confirm:{RESET} "
-            answer = input(prompt).strip().lower()
-            if answer != "execute":
-                print("[termai] Command cancelled.")
-                return None
-        else:
-            prompt_suffix = " (dangerous!) " if warnings else " "
-            answer = input(f"Execute this command?{prompt_suffix}[y/N] ").strip().lower()
-            if answer not in ("y", "yes"):
-                print("[termai] Command cancelled.")
-                return None
+        answer = _prompt_with_options(command, has_warnings=bool(warnings))
+        if answer is None:
+            return None
 
     registry = get_registry()
     command = registry.run_pre_hooks(command, ctx)
     return run_command(command, ctx, instruction=instruction)
+
+
+def _prompt_with_options(command: str, *, has_warnings: bool) -> str | None:
+    """Show execution options and return the user's choice, or None to cancel.
+
+    Options:
+      y  — execute once
+      a  — always allow this command (permanent)
+      s  — allow for this session
+      n  — cancel (default)
+    """
+    print()
+    warn_tag = f" {YELLOW}(has warnings){RESET}" if has_warnings else ""
+    print(f"  {BOLD}y{RESET} execute        "
+          f"{BOLD}a{RESET} always allow   "
+          f"{BOLD}s{RESET} session allow   "
+          f"{BOLD}n{RESET} cancel{warn_tag}")
+
+    try:
+        answer = input(f"\n  {BOLD}Run?{RESET} [y/a/s/N] ").strip().lower()
+    except (KeyboardInterrupt, EOFError):
+        print(f"\n  {DIM}Cancelled.{RESET}")
+        return None
+
+    if answer in ("y", "yes"):
+        return "y"
+    elif answer == "a":
+        add_to_permanent(command)
+        print(f"  {GREEN}✓{RESET} Added to permanent allow list")
+        return "a"
+    elif answer == "s":
+        add_to_session(command)
+        print(f"  {GREEN}✓{RESET} Allowed for this session")
+        return "s"
+    else:
+        print(f"  {DIM}Cancelled.{RESET}")
+        return None
 
 
 def run_command(

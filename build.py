@@ -57,6 +57,7 @@ def main() -> None:
         "--onefile",
         "--name", exe_name.removesuffix(".exe"),
         "--strip",
+        "--collect-all", "gpt4all",
         "--exclude-module", "tkinter",
         "--exclude-module", "test",
         "--exclude-module", "unittest",
