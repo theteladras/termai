@@ -72,10 +72,13 @@ The executable is output to `dist/termai` (or `dist/termai.exe` on Windows). Fro
 
 ## Usage
 
+No quotes needed — everything after flags is treated as your instruction:
+
 ```
-termai "your instruction"          # generate & preview a command
-termai -y "your instruction"       # skip confirmation, execute immediately
-termai --dry-run "instruction"     # preview only, don't execute
+termai list all python files       # no quotes needed
+termai "list all python files"     # quotes still work too
+termai -y show disk usage          # flags can go anywhere
+termai --dry-run create a new venv # preview only, don't execute
 termai --chat                      # interactive chat mode
 termai --history                   # show recent command history
 termai --history 50                # show last 50 commands
@@ -102,7 +105,8 @@ termai --provider openai           # override remote provider for this run
 `tai` works as a short alias for `termai`:
 
 ```bash
-tai -y "show disk usage"
+tai show disk usage
+tai -y deploy to production
 tai --chat
 tai --settings
 ```
@@ -143,7 +147,7 @@ termai --settings     # opens in your browser
 When an instruction requires multiple steps, termai automatically detects this and uses the AI to create a structured execution plan:
 
 ```
-tai "create a python project called api-service, set up a venv, install flask and pytest, init git"
+tai create a python project called api-service, set up a venv, install flask and pytest, init git
 ```
 
 The orchestrator will:

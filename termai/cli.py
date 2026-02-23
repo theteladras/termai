@@ -18,11 +18,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="termai",
         description="Local AI-powered terminal assistant",
-    )
-    parser.add_argument(
-        "instruction",
-        nargs="?",
-        help="Natural language instruction to convert into a shell command",
+        usage="%(prog)s [options] <instruction ...>",
     )
     parser.add_argument(
         "--chat",
@@ -137,7 +133,13 @@ def main() -> None:
         return
 
     parser = build_parser()
-    args = parser.parse_args()
+    args, remaining = parser.parse_known_args()
+
+    unknown_flags = [r for r in remaining if r.startswith("--")]
+    if unknown_flags:
+        parser.error(f"unrecognized arguments: {' '.join(unknown_flags)}")
+
+    instruction = " ".join(remaining).strip() or None
 
     if args.gui:
         from termai.gui import run_gui_wizard
@@ -203,25 +205,25 @@ def main() -> None:
         interactive_chat(ctx)
         return
 
-    if not args.instruction:
+    if not instruction:
         parser.print_help()
         sys.exit(1)
 
-    if is_multistep(args.instruction):
-        plan = generate_plan(args.instruction, ctx)
+    if is_multistep(instruction):
+        plan = generate_plan(instruction, ctx)
         if plan and len(plan.steps) > 1:
             execute_plan(plan, ctx,
                          dry_run=args.dry_run, auto_yes=args.yes)
             return
 
-    command = generate_command(args.instruction, ctx)
+    command = generate_command(instruction, ctx)
     if command:
         preview_and_execute(
             command,
             ctx,
             dry_run=args.dry_run,
             auto_yes=args.yes,
-            instruction=args.instruction,
+            instruction=instruction,
         )
 
 

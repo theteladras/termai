@@ -24,6 +24,76 @@ DIM = "\033[2m"
 YELLOW = "\033[0;33m"
 RESET = "\033[0m"
 
+_GREETING_RE = re.compile(
+    r"^(hi|hello|hey|sup|yo|good morning|good evening|good afternoon"
+    r"|thanks|thank you|bye|goodbye|what are you|who are you)\b",
+    re.IGNORECASE,
+)
+_BARE_CHAT_RE = re.compile(
+    r"^(can you explain|could you explain|explain this|explain that"
+    r"|tell me more|help me understand|what does this mean)\s*$",
+    re.IGNORECASE,
+)
+_QUESTION_RE = re.compile(
+    r"^(what|why|how|where|when|can you|could you|do you|are you|is it"
+    r"|explain|describe|help me understand|what'?s|tell me)"
+    r"\s+(are|is|do|does|did|was|were|can|could|should|would|will|have|has|had"
+    r"|the|a|an|your|my|this|that|it|about|what|me)\b",
+    re.IGNORECASE,
+)
+_ACTION_VERBS_RE = re.compile(
+    r"\b(install|create|delete|remove|run|execute|start|stop"
+    r"|build|deploy|find|list|show|make|set|get|update|open"
+    r"|download|copy|move|rename|kill|restart|running|listening"
+    r"|using|connected|mounted|occupied)\b",
+    re.IGNORECASE,
+)
+
+_CLASSIFY_SYSTEM = (
+    "You are an intent classifier for a terminal command assistant. "
+    "The user types text that is EITHER a shell command request (they want to "
+    "run something on their computer) OR a conversational message (greeting, "
+    "question about concepts, chitchat). "
+    "Reply with exactly one word: COMMAND or CHAT. Nothing else."
+)
+
+
+def _classify_intent(instruction: str, model: LocalModel) -> str:
+    """Classify input as 'command' or 'chat' using regex + local AI.
+
+    Layer 1 — regex (instant, zero cost):
+      Greetings and bare chat phrases are caught immediately.
+      Action verbs always win — even questions like "how do I install X"
+      are command requests in a terminal assistant context.
+      Pure questions without action verbs are treated as chat.
+    Layer 2 — local AI (smart, ~200ms):
+      Truly ambiguous inputs (no action verbs, no question patterns)
+      are sent to the local model for a one-word verdict.
+    Fallback:
+      If no model is available, default to 'command' so the user isn't blocked.
+    """
+    text = instruction.strip()
+
+    if _GREETING_RE.search(text):
+        return "chat"
+    if _BARE_CHAT_RE.search(text):
+        return "chat"
+
+    if _ACTION_VERBS_RE.search(text):
+        return "command"
+
+    if _QUESTION_RE.search(text):
+        return "chat"
+
+    if model.is_available:
+        raw = model.generate(_CLASSIFY_SYSTEM, f"Input: {text}", max_tokens=10)
+        token = raw.strip().upper()
+        if "CHAT" in token:
+            return "chat"
+        return "command"
+
+    return "command"
+
 _model: LocalModel | None = None
 _force_mode: str | None = None  # "remote", "local", or None (auto)
 
@@ -45,11 +115,19 @@ def generate_command(instruction: str, ctx: "SessionContext") -> str | None:
     """Convert a natural language instruction into a shell command.
 
     Flow:
+    0. Detect conversational input and redirect to --chat
     1. Try local generation (LLM or keyword fallback)
     2. If remote AI is configured, classify complexity
     3. Delegate to remote if complex; fall back to local on remote failure
     """
     model = _get_model()
+
+    intent = _classify_intent(instruction, model)
+    if intent == "chat":
+        print(f"\n  {CYAN}[termai]{RESET} That looks like a question, not a command request.")
+        print(f"  {DIM}Use {CYAN}termai --chat{RESET}{DIM} for conversations and questions.{RESET}\n")
+        return None
+
     from_fallback = False
 
     if _force_mode == "remote":
