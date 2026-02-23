@@ -1,0 +1,16 @@
+---
+description: GUI development patterns for the browser-based UI
+globs: "**/gui.py"
+alwaysApply: false
+---
+
+# GUI Patterns
+
+- The GUI is a single Python file with embedded HTML/CSS/JS — no external files or frameworks.
+- Uses Python's built-in `http.server.HTTPServer` with a custom handler. No Flask, no FastAPI.
+- All JS strings use double curly braces `{{ }}` for literal braces (Python f-string escaping).
+- API endpoints follow the pattern: `GET /api/<resource>` for reads, `POST /api/<resource>` for writes.
+- New tabs need: tab button in the tab bar, a `<div class="tab-content" id="tab-name">` section, JS load/render functions, and a `switchTab` hook.
+- The heartbeat watchdog keeps the server alive. Never add `beforeunload` or `pagehide` shutdown beacons — they fire on refresh and kill the server.
+- Server binds to port 49152 (fixed) with fallback to next 19 ports, then random.
+- Opens in Chromium `--app` mode for an app-like window. Falls back to default browser.

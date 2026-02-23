@@ -1,0 +1,14 @@
+---
+description: Guidelines for the safety module and command trust system
+globs: "**/safety.py,**/allowlist.py,**/executor.py"
+alwaysApply: false
+---
+
+# Safety & Trust Rules
+
+- Every new destructive pattern must use a compiled `re.compile()` regex with word boundaries (`\b`), not simple substring matching.
+- Severity levels: `critical` (data loss, system destruction), `high` (significant risk), `medium` (worth knowing about).
+- Critical commands (rm -rf /, mkfs, dd, fork bomb) always require typing "execute" — never auto-execute.
+- The allow list has three tiers: built-in safe (hardcoded), user permanent (~/.termai/config.toml), session-scoped (in-memory).
+- Never add sudo, rm, or any command with safety warnings to the built-in safe list.
+- When adding new safety rules, test for false positives (e.g., `rm -rf /tmp/test` should NOT trigger root deletion warning).

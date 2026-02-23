@@ -1,0 +1,31 @@
+---
+description: termai project architecture and module responsibilities
+alwaysApply: true
+---
+
+# Project Architecture
+
+termai is a local AI-powered terminal assistant. Every module has a single responsibility:
+
+- `cli.py` — argument parsing and entry point (dispatches to other modules)
+- `generator.py` — natural language → single shell command (local + remote AI)
+- `orchestrator.py` — multi-step task decomposition, dependency resolution, wave execution
+- `executor.py` — command preview, safety checks, user confirmation, execution
+- `safety.py` — destructive command detection via regex rules
+- `allowlist.py` — three-tier command trust (built-in safe, user-allowed, session-allowed)
+- `classifier.py` — complexity heuristic for local vs remote AI delegation
+- `remote.py` — remote AI providers (OpenAI, Claude) with lazy SDK imports
+- `model.py` — local LLM wrapper (GPT4All)
+- `chat.py` — interactive chat REPL
+- `context.py` — session context (OS, shell, cwd, git, env vars)
+- `config.py` — TOML config and env var overrides
+- `logger.py` — command history logging (JSONL)
+- `process_log.py` — process-level history (multi-step task lifecycle)
+- `gui.py` — browser-based GUI (embedded HTML/CSS/JS, Python HTTP server)
+- `plugins.py` — plugin system for slash commands and hooks
+
+Key principles:
+- Offline-first: everything works without network. Remote AI is always optional.
+- Graceful degradation: if a dependency is missing, fall back silently.
+- Safety by default: every generated command is previewed; destructive ops are flagged.
+- Errors are best-effort: logging, config writes, and optional features never crash the app.

@@ -1,0 +1,20 @@
+---
+description: Python coding conventions for the termai project
+globs: "**/*.py"
+alwaysApply: false
+---
+
+# Python Style
+
+- Use `from __future__ import annotations` at the top of every module.
+- Use modern union syntax (`str | None`, not `Optional[str]`), `list[str]` not `List[str]`.
+- Use `TYPE_CHECKING` guard for imports only needed for type annotations.
+- All functions must have explicit return type annotations.
+- Use `pathlib.Path` for filesystem operations, not `os.path`.
+- Use f-strings for all string formatting.
+- Double quotes for strings. Line length max 100 characters.
+- Module-level ANSI color constants (`CYAN`, `GREEN`, `RESET`, etc.) where terminal output is needed.
+- Private helpers prefixed with `_underscore`.
+- Compiled regex patterns stored as module-level `_UPPER_CASE` constants.
+- Lazy imports for heavy dependencies (gpt4all, openai, anthropic) inside functions.
+- `@dataclass` for structured data; use `field(default_factory=...)` for mutable defaults.

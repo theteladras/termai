@@ -1,0 +1,14 @@
+---
+description: Error handling and resilience patterns
+globs: "**/*.py"
+alwaysApply: false
+---
+
+# Error Handling
+
+- Never let optional features crash the app. Wrap logging, config, GUI, and remote AI in try/except.
+- Use broad `except Exception` only for best-effort operations (logging, plugin hooks). Be specific everywhere else.
+- Fall back gracefully: if a local model is unavailable, use keyword fallback. If remote AI fails, use local result.
+- Print user-friendly colored error messages: `{YELLOW}[termai]{RESET} message`. Never show raw tracebacks to users.
+- File I/O for logs and config should use `try/except OSError: pass` — never block the user.
+- Import errors for optional packages (openai, anthropic) must be caught and produce a helpful install hint.

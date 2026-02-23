@@ -1,0 +1,32 @@
+---
+description: Git commit rules for termai project
+alwaysApply: true
+---
+
+# Git Commit Rules
+
+- NEVER add "Co-authored-by" trailers to commit messages. No co-author lines of any kind.
+- Do not modify git config (user.name, user.email, etc.).
+
+## Conventional Commits
+
+All commit messages MUST use a conventional commit prefix:
+
+- `feat:` — new feature or capability
+- `fix:` — bug fix
+- `refactor:` — code restructuring without behavior change
+- `chore:` — maintenance, dependencies, build, config
+- `docs:` — documentation only
+- `style:` — formatting, whitespace, no logic change
+- `test:` — adding or updating tests
+- `perf:` — performance improvement
+- `ci:` — CI/CD changes
+
+Format: `<prefix>: <short description>`
+
+Examples:
+- `feat: add AI orchestrator for multi-step task execution`
+- `fix: prevent GUI server shutdown on page refresh`
+- `chore: bundle openai/anthropic into standalone executable`
+- `docs: add roadmap section to README`
+- `refactor: rewrite safety module with regex-based rules`
