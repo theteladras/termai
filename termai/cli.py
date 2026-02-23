@@ -86,6 +86,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Write a default config file to ~/.termai/config.toml",
     )
     parser.add_argument(
+        "--uninstall",
+        action="store_true",
+        help="Remove termai binaries, config, and optionally downloaded models",
+    )
+    parser.add_argument(
         "--version",
         action="version",
         version=f"%(prog)s {__version__}",
@@ -139,6 +144,11 @@ def main() -> None:
         cfg = Config()
         cfg.write_default()
         print("[termai] Config written to ~/.termai/config.toml")
+        return
+
+    if args.uninstall:
+        from termai.uninstaller import run_uninstall
+        run_uninstall()
         return
 
     if args.history is not None:

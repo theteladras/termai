@@ -87,6 +87,7 @@ termai --list-models               # show available models
 termai --model Mistral-7B-...      # use a specific model for this run
 termai --device gpu                # run model on GPU
 termai --init-config               # create default config file
+termai --uninstall                 # remove binaries, config, and models
 ```
 
 `tai` works as a short alias for `termai`:
@@ -284,6 +285,7 @@ termai/
 ├── models.py        # Model catalog and interactive selector
 ├── installer.py     # Terminal-based installation wizard
 ├── gui.py           # Browser-based GUI (wizard + settings dashboard)
+├── uninstaller.py   # Uninstall wizard
 ├── generator.py     # Natural language → shell command
 ├── executor.py      # Command preview, safety checks, execution
 ├── safety.py        # Destructive command detection & warnings
