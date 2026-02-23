@@ -18,6 +18,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
 import urllib.request
 import webbrowser
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -467,7 +468,7 @@ function toast(msg) {{
 function startInstall() {{
   showStep(2);
   fetch('/api/install', {{ method: 'POST', headers: {{'Content-Type': 'application/json'}}, body: JSON.stringify({{ model_idx: selectedModel }}) }});
-  pollTimer = setInterval(pollProgress, 400);
+  pollTimer = setInterval(pollProgress, 1000);
 }}
 
 function pollProgress() {{
@@ -488,7 +489,7 @@ function pollProgress() {{
     }}
     if (s.done) {{ clearInterval(pollTimer); setTimeout(() => showFinish(s), 500); }}
     if (s.error) {{ clearInterval(pollTimer); document.getElementById('install-title').textContent = 'Installation failed'; document.getElementById('install-status').textContent = s.error; }}
-  }});
+  }}).catch(() => {{}});
 }}
 
 function showFinish(s) {{
@@ -656,7 +657,7 @@ document.addEventListener('keydown', e => {{
 }});
 
 // Heartbeat + cleanup
-setInterval(() => fetch('/api/heartbeat').catch(() => {{}}), 2000);
+setInterval(() => fetch('/api/heartbeat').catch(() => {{}}), 3000);
 window.addEventListener('beforeunload', () => navigator.sendBeacon('/api/shutdown'));
 </script>
 </body>
@@ -913,31 +914,62 @@ def _download_model(model) -> None:
     dest = MODEL_DIR / model.filename
     tmp = dest.with_suffix(".part")
     _log(f"Downloading from {url}", "dim")
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": "termai/0.1"})
-        resp = urllib.request.urlopen(req, timeout=30)
-    except Exception as e:
-        _log(f"Download failed: {e}", "err")
-        raise
-    total = int(resp.headers.get("Content-Length", 0))
+
     downloaded = 0
-    chunk_size = 256 * 1024
-    start_time = time.monotonic()
-    try:
-        with open(tmp, "wb") as f:
-            while True:
-                chunk = resp.read(chunk_size)
-                if not chunk:
-                    break
-                f.write(chunk)
-                downloaded += len(chunk)
-                _update_progress(downloaded, total, start_time)
-        tmp.rename(dest)
-        _download_state["pct"] = 100
-        _log(f"Model saved to {dest}", "ok")
-    except Exception:
-        tmp.unlink(missing_ok=True)
-        raise
+    if tmp.exists():
+        downloaded = tmp.stat().st_size
+        _log(f"Resuming from {downloaded / 1e6:.1f} MB", "dim")
+
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "termai/0.1"})
+            if downloaded > 0:
+                req.add_header("Range", f"bytes={downloaded}-")
+            resp = urllib.request.urlopen(req, timeout=60)
+
+            if downloaded > 0 and resp.status == 200:
+                downloaded = 0
+            total_header = resp.headers.get("Content-Length", "0")
+            total = int(total_header) + downloaded
+
+            chunk_size = 256 * 1024
+            start_time = time.monotonic()
+            with open(tmp, "ab" if downloaded > 0 else "wb") as f:
+                while True:
+                    try:
+                        chunk = resp.read(chunk_size)
+                    except Exception as read_err:
+                        _log(f"Connection interrupted: {read_err}", "dim")
+                        break
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    _update_progress(downloaded, total, start_time)
+
+            if total > 0 and downloaded >= total:
+                tmp.rename(dest)
+                _download_state["pct"] = 100
+                _log(f"Model saved to {dest}", "ok")
+                return
+
+            if attempt < max_retries - 1:
+                _log(f"Download incomplete ({downloaded / 1e6:.0f}/{total / 1e6:.0f} MB), retrying...", "dim")
+                time.sleep(2)
+                continue
+            else:
+                tmp.unlink(missing_ok=True)
+                raise RuntimeError(f"Download incomplete after {max_retries} attempts")
+
+        except (urllib.error.URLError, OSError) as e:
+            if attempt < max_retries - 1:
+                _log(f"Attempt {attempt + 1} failed: {e} — retrying in 3s", "dim")
+                time.sleep(3)
+            else:
+                tmp.unlink(missing_ok=True)
+                _log(f"Download failed after {max_retries} attempts: {e}", "err")
+                raise
 
 
 def _update_progress(downloaded: int, total: int, start_time: float) -> None:
@@ -982,9 +1014,11 @@ def _do_setup_config() -> None:
 
 def _heartbeat_watchdog(server: HTTPServer, handler_cls: type) -> None:
     while True:
-        time.sleep(3)
+        time.sleep(5)
+        if _download_state.get("active") and not _download_state.get("done") and not _download_state.get("error"):
+            continue
         last = handler_cls.last_heartbeat
-        if last > 0 and (time.monotonic() - last) > 8:
+        if last > 0 and (time.monotonic() - last) > 15:
             print("[termai] Browser disconnected — shutting down.")
             server.shutdown()
             return
