@@ -45,10 +45,10 @@ class LocalModel:
             if not model_file.exists():
                 self._available = False
                 print(
-                    f"\033[0;33m[termai] No local model found at {model_file}\033[0m\n"
+                    f"\033[0;33m[termai] No local model found.\033[0m\n"
                     "[termai] Using rule-based fallback (works offline, no download).\n"
-                    "[termai] To download a model, run:\n"
-                    f"[termai]   termai --download-model\n"
+                    "[termai] To pick and download an AI model, run:\n"
+                    "[termai]   termai --setup\n"
                 )
                 return
 
@@ -127,22 +127,6 @@ class LocalModel:
 
 
 def download_model(model_name: str | None = None) -> None:
-    """Interactively download a model via GPT4All."""
-    cfg = get_config()
-    name = model_name or cfg.model
-
-    print(f"\033[1;36m[termai] Downloading model: {name}\033[0m")
-    print(f"[termai] Destination: {MODEL_DIR}")
-    print(f"[termai] This may take a few minutes depending on your connection.\n")
-
-    try:
-        from gpt4all import GPT4All  # type: ignore[import-untyped]
-
-        MODEL_DIR.mkdir(parents=True, exist_ok=True)
-        GPT4All(name, model_path=str(MODEL_DIR), allow_download=True)
-        print(f"\n\033[1;32m[termai] Model '{name}' is ready!\033[0m")
-
-    except KeyboardInterrupt:
-        print(f"\n\033[0;33m[termai] Download cancelled.\033[0m")
-    except Exception as e:
-        print(f"\n\033[1;31m[termai] Download failed: {e}\033[0m")
+    """Download a model. Delegates to the interactive setup in termai.models."""
+    from termai.models import interactive_setup
+    interactive_setup()

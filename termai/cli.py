@@ -56,9 +56,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Device to run the model on (default: cpu)",
     )
     parser.add_argument(
-        "--download-model",
+        "--setup",
         action="store_true",
-        help="Download the AI model (run once, ~2 GB)",
+        help="Interactive model selector — pick and download a local AI model",
+    )
+    parser.add_argument(
+        "--list-models",
+        action="store_true",
+        help="Show available AI models with sizes and quality info",
     )
     parser.add_argument(
         "--init-config",
@@ -77,6 +82,16 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
 
+    if args.setup:
+        from termai.models import interactive_setup
+        interactive_setup()
+        return
+
+    if args.list_models:
+        from termai.models import print_catalog
+        print_catalog()
+        return
+
     if args.init_config:
         from termai.config import Config
         cfg = Config()
@@ -84,19 +99,10 @@ def main() -> None:
         print("[termai] Config written to ~/.termai/config.toml")
         return
 
-    if args.download_model:
-        if args.model:
-            os.environ["TERMAI_MODEL"] = args.model
-        from termai.model import download_model
-        download_model(model_name=args.model)
-        return
-
     if args.history is not None:
         print_history(limit=args.history)
         return
 
-    # Propagate CLI model/device overrides via env vars so that Config picks
-    # them up before the model is loaded.
     if args.model:
         os.environ["TERMAI_MODEL"] = args.model
     if args.device:

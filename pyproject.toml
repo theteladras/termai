@@ -17,10 +17,12 @@ dependencies = [
 dev = [
     "pytest>=7.0",
     "ruff>=0.3",
+    "pyinstaller>=6.0",
 ]
 
 [project.scripts]
 termai = "termai.cli:main"
+tai = "termai.cli:main"
 
 [tool.ruff]
 line-length = 100

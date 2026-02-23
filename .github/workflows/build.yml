@@ -1,0 +1,86 @@
+name: Build Executables
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+            artifact: termai-macos-arm64
+            binary: termai
+          - os: macos-13
+            artifact: termai-macos-x64
+            binary: termai
+          - os: ubuntu-latest
+            artifact: termai-linux-x64
+            binary: termai
+          - os: windows-latest
+            artifact: termai-windows-x64
+            binary: termai.exe
+
+    runs-on: ${{ matrix.os }}
+    name: Build (${{ matrix.artifact }})
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Build executable
+        run: python build.py --clean
+
+      - name: Verify binary exists
+        run: ls -la dist/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/${{ matrix.binary }}
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare release files
+        run: |
+          mkdir release
+          for dir in artifacts/*/; do
+            name=$(basename "$dir")
+            file=$(find "$dir" -type f | head -1)
+            ext=""
+            if [[ "$name" == *"windows"* ]]; then ext=".exe"; fi
+            cp "$file" "release/${name}${ext}"
+            chmod +x "release/${name}${ext}" 2>/dev/null || true
+          done
+          ls -la release/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          generate_release_notes: true

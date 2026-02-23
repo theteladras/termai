@@ -88,8 +88,19 @@ _FALLBACK_MAP: list[tuple[list[str], str]] = [
     (["count", "lines"],           "wc -l"),
     (["git", "status"],            "git status"),
     (["git", "log"],               "git log --oneline -10"),
+    (["git", "history"],           "git log --oneline -10"),
     (["docker", "containers"],     "docker ps -a"),
     (["docker", "images"],         "docker images"),
+    (["command", "history"],       "cat ~/.zsh_history | tail -30" if __import__("os").environ.get("SHELL", "").endswith("zsh") else "cat ~/.bash_history | tail -30"),
+    (["history"],                  "cat ~/.zsh_history | tail -30" if __import__("os").environ.get("SHELL", "").endswith("zsh") else "cat ~/.bash_history | tail -30"),
+    (["whoami"],                   "whoami"),
+    (["uptime"],                   "uptime"),
+    (["date"],                     "date"),
+    (["hostname"],                 "hostname"),
+    (["cpu", "info"],              "sysctl -n machdep.cpu.brand_string" if __import__("platform").system() == "Darwin" else "lscpu"),
+    (["open", "ports"],            "lsof -i -P -n | grep LISTEN"),
+    (["environment", "variables"], "env"),
+    (["path"],                     "echo $PATH | tr ':' '\\n'"),
 ]
 
 
@@ -97,10 +108,16 @@ def _generate_fallback(instruction: str, ctx: "SessionContext") -> str:
     """Keyword-matching fallback when no AI model is loaded."""
     words = instruction.lower().split()
     best_match = ""
-    best_score = 0
+    best_score = 0.0
 
     for keywords, cmd in _FALLBACK_MAP:
-        score = sum(1 for kw in keywords if kw in words)
+        hits = sum(1 for kw in keywords if kw in words)
+        if hits == 0:
+            continue
+        # Prefer rules where ALL keywords match (ratio == 1.0),
+        # breaking ties by absolute number of matched keywords.
+        ratio = hits / len(keywords)
+        score = ratio + hits * 0.01
         if score > best_score:
             best_score = score
             best_match = cmd
