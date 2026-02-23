@@ -63,7 +63,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--gui",
         action="store_true",
-        help="Launch the graphical installation wizard",
+        help="Launch the graphical setup wizard",
+    )
+    parser.add_argument(
+        "--settings",
+        action="store_true",
+        help="Open the settings dashboard (model, allow list, config)",
     )
     parser.add_argument(
         "--setup",
@@ -106,7 +111,12 @@ def main() -> None:
 
     if args.gui:
         from termai.gui import run_gui_wizard
-        run_gui_wizard()
+        run_gui_wizard(mode="wizard")
+        return
+
+    if args.settings:
+        from termai.gui import run_gui_wizard
+        run_gui_wizard(mode="settings")
         return
 
     if args.install:

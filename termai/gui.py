@@ -1,13 +1,15 @@
-"""Browser-based GUI installation wizard for termai.
+"""Browser-based GUI for termai — wizard + settings dashboard.
 
 Uses Python's built-in http.server + webbrowser — zero external
 dependencies, works on every OS regardless of what's installed.
-The wizard runs as a local web page served from a tiny HTTP server.
+
+- First run (or ``--gui``): shows the installation wizard.
+- Already set up (or ``--settings``): shows the settings dashboard
+  with tabs for model management and the command allow list.
 """
 
 from __future__ import annotations
 
-import html
 import json
 import os
 import platform
@@ -21,8 +23,12 @@ import webbrowser
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 
-from termai.config import CONFIG_DIR, CONFIG_FILE
+from termai.config import CONFIG_DIR, CONFIG_FILE, get_config
 from termai.models import CATALOG, MODEL_DIR
+from termai.allowlist import (
+    get_permanent_list, add_to_permanent, remove_from_permanent,
+    get_safe_commands, disable_safe_command, enable_safe_command,
+)
 
 MODEL_BASE_URL = "https://gpt4all.io/models/gguf/"
 
@@ -33,16 +39,9 @@ INSTALL_DIRS_UNIX = [
 ]
 
 _download_state: dict = {
-    "active": False,
-    "cancelled": False,
-    "pct": 0,
-    "downloaded_mb": 0,
-    "total_mb": 0,
-    "speed": "",
-    "eta": "",
-    "done": False,
-    "error": "",
-    "logs": [],
+    "active": False, "cancelled": False, "pct": 0,
+    "downloaded_mb": 0, "total_mb": 0, "speed": "", "eta": "",
+    "done": False, "error": "", "logs": [],
 }
 
 
@@ -50,144 +49,215 @@ def _log(msg: str, level: str = "ok") -> None:
     _download_state["logs"].append({"msg": msg, "level": level})
 
 
-# -- HTML/CSS/JS (single-page app) -------------------------------------------
+def _is_installed() -> bool:
+    """Check if termai is meaningfully set up."""
+    has_binary = shutil.which("termai") is not None or getattr(sys, "frozen", False)
+    has_config = CONFIG_FILE.exists()
+    return has_binary and has_config
 
-def _build_html() -> str:
-    models_json = json.dumps([
+
+def _get_current_model() -> str:
+    cfg = get_config()
+    return cfg.model
+
+
+def _models_state() -> list[dict]:
+    current = _get_current_model()
+    return [
         {
-            "name": m.name,
-            "filename": m.filename,
-            "size_gb": m.size_gb,
-            "params": m.params,
-            "min_ram": m.min_ram,
-            "quality": m.quality,
+            "name": m.name, "filename": m.filename,
+            "size_gb": m.size_gb, "params": m.params,
+            "min_ram": m.min_ram, "quality": m.quality,
             "description": m.description,
             "installed": (MODEL_DIR / m.filename).exists(),
+            "active": m.filename == current,
         }
         for m in CATALOG
-    ])
+    ]
+
+
+# -- Shared CSS ---------------------------------------------------------------
+
+_CSS = """
+:root {
+  --bg: #181825; --bg-card: #1e1e2e; --bg-hover: #313244;
+  --bg-input: #11111b; --fg: #cdd6f4; --fg-dim: #585b70;
+  --fg-sub: #a6adc8; --accent: #89b4fa; --accent-dim: #45475a;
+  --green: #a6e3a1; --red: #f38ba8; --yellow: #f9e2af; --mauve: #cba6f7;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  background: var(--bg); color: var(--fg); min-height: 100vh;
+  display: flex; justify-content: center; align-items: flex-start;
+  padding: 40px 20px;
+}
+.wizard, .dashboard { width: 100%; max-width: 640px; }
+.step, .tab-content { display: none; animation: fadeIn 0.3s ease; }
+.step.active, .tab-content.active { display: block; }
+@keyframes fadeIn { from { opacity:0; transform: translateY(10px); } to { opacity:1; transform: translateY(0); } }
+
+h1 { font-size: 28px; font-weight: 700; margin-bottom: 6px; }
+h2 { font-size: 20px; font-weight: 600; margin-bottom: 12px; }
+.subtitle { color: var(--fg-sub); font-size: 14px; margin-bottom: 28px; }
+
+.card {
+  background: var(--bg-card); border: 1px solid var(--accent-dim);
+  border-radius: 10px; padding: 16px 20px; margin-bottom: 12px;
+}
+.features { margin: 24px 0; }
+.feature { display: flex; align-items: center; gap: 12px; padding: 8px 0; font-size: 15px; }
+.dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+
+.model-card {
+  background: var(--bg-card); border: 1px solid var(--accent-dim);
+  border-radius: 10px; padding: 14px 18px; margin-bottom: 8px;
+  cursor: pointer; transition: border-color 0.2s, background 0.2s;
+}
+.model-card:hover { background: var(--bg-hover); }
+.model-card.selected { border-color: var(--accent); background: var(--bg-hover); }
+.model-card .top { display: flex; align-items: center; justify-content: space-between; }
+.model-card .name { font-size: 15px; font-weight: 600; }
+.model-card .meta { color: var(--fg-dim); font-size: 12px; margin-top: 4px; }
+.badge { font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 4px; text-transform: uppercase; letter-spacing: 0.5px; }
+.badge-Basic { background: var(--yellow); color: var(--bg-input); }
+.badge-Good { background: var(--green); color: var(--bg-input); }
+.badge-Better { background: var(--accent); color: var(--bg-input); }
+.badge-Best { background: var(--mauve); color: var(--bg-input); }
+.installed-tag { color: var(--green); font-size: 12px; margin-left: 8px; }
+.active-tag { color: var(--mauve); font-size: 12px; margin-left: 8px; font-weight: 600; }
+
+.btn-row { display: flex; justify-content: space-between; margin-top: 32px; }
+.btn {
+  padding: 12px 28px; border-radius: 8px; border: none;
+  font-size: 14px; font-weight: 600; cursor: pointer; transition: all 0.2s;
+}
+.btn-primary { background: var(--accent); color: var(--bg-input); }
+.btn-primary:hover { background: var(--mauve); }
+.btn-primary:disabled { background: var(--accent-dim); color: var(--fg-dim); cursor: not-allowed; }
+.btn-secondary { background: var(--bg-hover); color: var(--fg-sub); }
+.btn-secondary:hover { background: var(--accent-dim); }
+.btn-danger { background: var(--red); color: var(--bg-input); }
+.btn-danger:hover { opacity: 0.85; }
+.btn-sm { padding: 6px 14px; font-size: 12px; }
+
+.progress-wrap { margin: 24px 0 16px; }
+.progress-bar { width: 100%; height: 12px; background: var(--bg-input); border-radius: 6px; overflow: hidden; }
+.progress-fill { height: 100%; background: linear-gradient(90deg, var(--accent), var(--mauve)); border-radius: 6px; transition: width 0.3s ease; width: 0%; }
+.progress-stats { display: flex; justify-content: space-between; color: var(--fg-dim); font-size: 12px; margin-top: 6px; }
+.log-box {
+  background: var(--bg-input); border-radius: 8px; padding: 14px 16px; margin-top: 16px; max-height: 200px;
+  overflow-y: auto; font-family: 'SF Mono', Menlo, Consolas, monospace; font-size: 12px; line-height: 1.8;
+}
+.log-ok { color: var(--green); } .log-err { color: var(--red); } .log-dim { color: var(--fg-dim); }
+
+.check-item { display: flex; align-items: center; gap: 10px; padding: 6px 0; font-size: 15px; }
+.check-item .icon { font-size: 18px; }
+.check-ok { color: var(--green); } .check-warn { color: var(--yellow); }
+
+.code-examples { margin-top: 16px; }
+.code-row { display: flex; gap: 16px; padding: 5px 0; font-size: 13px; }
+.code-cmd { font-family: 'SF Mono', Menlo, Consolas, monospace; color: var(--accent); white-space: nowrap; }
+.code-desc { color: var(--fg-dim); }
+
+/* Tabs */
+.tab-bar { display: flex; gap: 0; margin-bottom: 24px; border-bottom: 1px solid var(--accent-dim); }
+.tab-btn {
+  padding: 10px 20px; font-size: 14px; font-weight: 600; cursor: pointer;
+  background: none; border: none; color: var(--fg-dim); border-bottom: 2px solid transparent;
+  transition: all 0.2s;
+}
+.tab-btn:hover { color: var(--fg); }
+.tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+/* Allow list */
+.allow-item {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 14px; background: var(--bg-card); border: 1px solid var(--accent-dim);
+  border-radius: 8px; margin-bottom: 6px;
+}
+.allow-item .cmd { font-family: 'SF Mono', Menlo, Consolas, monospace; font-size: 13px; color: var(--accent); }
+.allow-item .remove-btn {
+  background: none; border: none; color: var(--fg-dim); cursor: pointer;
+  font-size: 16px; padding: 2px 8px; border-radius: 4px; transition: all 0.2s;
+}
+.allow-item .remove-btn:hover { color: var(--red); background: var(--bg-hover); }
+
+.add-row { display: flex; gap: 8px; margin-top: 12px; }
+.add-input {
+  flex: 1; padding: 10px 14px; background: var(--bg-input); border: 1px solid var(--accent-dim);
+  border-radius: 8px; color: var(--fg); font-family: 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 13px; outline: none;
+}
+.add-input:focus { border-color: var(--accent); }
+.add-input::placeholder { color: var(--fg-dim); }
+
+.safe-list {
+  max-height: 280px; overflow-y: auto; padding: 12px 16px;
+  background: var(--bg-input); border-radius: 8px; margin-top: 8px;
+  display: flex; flex-wrap: wrap; gap: 6px;
+}
+.safe-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px; border-radius: 6px; font-size: 12px;
+  font-family: 'SF Mono', Menlo, Consolas, monospace; cursor: pointer;
+  transition: all 0.2s; border: 1px solid transparent; user-select: none;
+}
+.safe-chip.enabled { background: var(--bg-hover); color: var(--green); border-color: var(--accent-dim); }
+.safe-chip.disabled { background: var(--bg); color: var(--fg-dim); text-decoration: line-through; opacity: 0.5; }
+.safe-chip:hover { border-color: var(--accent); opacity: 1; }
+
+/* History */
+.history-item {
+  background: var(--bg-card); border: 1px solid var(--accent-dim);
+  border-radius: 8px; padding: 12px 16px; margin-bottom: 8px;
+}
+.history-item .cmd {
+  font-family: 'SF Mono', Menlo, Consolas, monospace; font-size: 13px;
+  color: var(--accent); margin-bottom: 4px;
+}
+.history-item .instruction { color: var(--fg-sub); font-size: 13px; margin-bottom: 4px; }
+.history-item .meta { color: var(--fg-dim); font-size: 11px; display: flex; gap: 16px; }
+.history-item .status-ok { color: var(--green); }
+.history-item .status-fail { color: var(--red); }
+.history-controls { display: flex; gap: 8px; align-items: center; margin-bottom: 16px; }
+.history-controls select {
+  padding: 8px 12px; background: var(--bg-input); border: 1px solid var(--accent-dim);
+  border-radius: 8px; color: var(--fg); font-size: 13px; outline: none; cursor: pointer;
+}
+.history-controls select:focus { border-color: var(--accent); }
+.history-empty { color: var(--fg-dim); font-size: 14px; padding: 20px 0; text-align: center; }
+
+.toast {
+  position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+  background: var(--green); color: var(--bg-input); padding: 10px 24px;
+  border-radius: 8px; font-weight: 600; font-size: 14px;
+  opacity: 0; transition: opacity 0.3s; pointer-events: none; z-index: 100;
+}
+.toast.show { opacity: 1; }
+"""
+
+
+# -- HTML builder: wizard + settings ------------------------------------------
+
+def _build_html(mode: str = "auto") -> str:
+    models_json = json.dumps(_models_state())
+    allowed_json = json.dumps(sorted(get_permanent_list()))
+    safe_json = json.dumps(get_safe_commands())
+    current_model = _get_current_model()
+    show_settings = "true" if mode == "settings" else ("true" if (mode == "auto" and _is_installed()) else "false")
 
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>termai — Setup</title>
-<style>
-:root {{
-  --bg: #181825; --bg-card: #1e1e2e; --bg-hover: #313244;
-  --bg-input: #11111b; --fg: #cdd6f4; --fg-dim: #585b70;
-  --fg-sub: #a6adc8; --accent: #89b4fa; --accent-dim: #45475a;
-  --green: #a6e3a1; --red: #f38ba8; --yellow: #f9e2af; --mauve: #cba6f7;
-}}
-* {{ margin:0; padding:0; box-sizing:border-box; }}
-body {{
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
-  background: var(--bg); color: var(--fg); min-height: 100vh;
-  display: flex; justify-content: center; align-items: flex-start;
-  padding: 40px 20px;
-}}
-.wizard {{ width: 100%; max-width: 600px; }}
-.step {{ display: none; animation: fadeIn 0.3s ease; }}
-.step.active {{ display: block; }}
-@keyframes fadeIn {{ from {{ opacity:0; transform: translateY(10px); }} to {{ opacity:1; transform: translateY(0); }} }}
-
-h1 {{ font-size: 28px; font-weight: 700; margin-bottom: 6px; }}
-.subtitle {{ color: var(--fg-sub); font-size: 14px; margin-bottom: 28px; }}
-
-.card {{
-  background: var(--bg-card); border: 1px solid var(--accent-dim);
-  border-radius: 10px; padding: 16px 20px; margin-bottom: 12px;
-}}
-
-.features {{ margin: 24px 0; }}
-.feature {{
-  display: flex; align-items: center; gap: 12px;
-  padding: 8px 0; font-size: 15px;
-}}
-.dot {{ width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }}
-
-.model-card {{
-  background: var(--bg-card); border: 1px solid var(--accent-dim);
-  border-radius: 10px; padding: 14px 18px; margin-bottom: 8px;
-  cursor: pointer; transition: border-color 0.2s, background 0.2s;
-}}
-.model-card:hover {{ background: var(--bg-hover); }}
-.model-card.selected {{ border-color: var(--accent); background: var(--bg-hover); }}
-.model-card .top {{ display: flex; align-items: center; justify-content: space-between; }}
-.model-card .name {{ font-size: 15px; font-weight: 600; }}
-.model-card .meta {{ color: var(--fg-dim); font-size: 12px; margin-top: 4px; }}
-.badge {{
-  font-size: 10px; font-weight: 700; padding: 2px 8px;
-  border-radius: 4px; text-transform: uppercase; letter-spacing: 0.5px;
-}}
-.badge-Basic {{ background: var(--yellow); color: var(--bg-input); }}
-.badge-Good {{ background: var(--green); color: var(--bg-input); }}
-.badge-Better {{ background: var(--accent); color: var(--bg-input); }}
-.badge-Best {{ background: var(--mauve); color: var(--bg-input); }}
-.installed-tag {{ color: var(--green); font-size: 12px; margin-left: 8px; }}
-
-.btn-row {{ display: flex; justify-content: space-between; margin-top: 32px; }}
-.btn {{
-  padding: 12px 28px; border-radius: 8px; border: none;
-  font-size: 14px; font-weight: 600; cursor: pointer; transition: all 0.2s;
-}}
-.btn-primary {{
-  background: var(--accent); color: var(--bg-input);
-}}
-.btn-primary:hover {{ background: var(--mauve); }}
-.btn-secondary {{
-  background: var(--bg-hover); color: var(--fg-sub);
-}}
-.btn-secondary:hover {{ background: var(--accent-dim); }}
-
-/* Progress */
-.progress-wrap {{ margin: 24px 0 16px; }}
-.progress-bar {{
-  width: 100%; height: 12px; background: var(--bg-input);
-  border-radius: 6px; overflow: hidden;
-}}
-.progress-fill {{
-  height: 100%; background: linear-gradient(90deg, var(--accent), var(--mauve));
-  border-radius: 6px; transition: width 0.3s ease; width: 0%;
-}}
-.progress-stats {{
-  display: flex; justify-content: space-between;
-  color: var(--fg-dim); font-size: 12px; margin-top: 6px;
-}}
-.log-box {{
-  background: var(--bg-input); border-radius: 8px;
-  padding: 14px 16px; margin-top: 16px; max-height: 200px;
-  overflow-y: auto; font-family: 'SF Mono', Menlo, Consolas, monospace;
-  font-size: 12px; line-height: 1.8;
-}}
-.log-ok {{ color: var(--green); }}
-.log-err {{ color: var(--red); }}
-.log-dim {{ color: var(--fg-dim); }}
-
-/* Finish */
-.check-item {{
-  display: flex; align-items: center; gap: 10px;
-  padding: 6px 0; font-size: 15px;
-}}
-.check-item .icon {{ font-size: 18px; }}
-.check-ok {{ color: var(--green); }}
-.check-warn {{ color: var(--yellow); }}
-
-.code-examples {{ margin-top: 16px; }}
-.code-row {{
-  display: flex; gap: 16px; padding: 5px 0; font-size: 13px;
-}}
-.code-cmd {{
-  font-family: 'SF Mono', Menlo, Consolas, monospace;
-  color: var(--accent); white-space: nowrap;
-}}
-.code-desc {{ color: var(--fg-dim); }}
-</style>
+<title>termai</title>
+<style>{_CSS}</style>
 </head>
 <body>
-<div class="wizard">
 
+<div class="wizard" id="wizard-view">
   <!-- Step 0: Welcome -->
   <div class="step active" id="step-0">
     <h1>termai</h1>
@@ -204,7 +274,7 @@ h1 {{ font-size: 28px; font-weight: 700; margin-bottom: 6px; }}
     </div>
   </div>
 
-  <!-- Step 1: Model selection -->
+  <!-- Step 1: Model selection (wizard) -->
   <div class="step" id="step-1">
     <h1>Choose a Model</h1>
     <div class="subtitle">Downloaded once and stored locally. No internet needed after setup.</div>
@@ -243,23 +313,134 @@ h1 {{ font-size: 28px; font-weight: 700; margin-bottom: 6px; }}
         <div class="code-row"><span class="code-cmd">tai "show git log"</span><span class="code-desc">short alias</span></div>
       </div>
     </div>
-    <div class="btn-row" style="justify-content:flex-end">
+    <div class="btn-row">
+      <button class="btn btn-secondary" onclick="openSettings()">Settings</button>
       <button class="btn btn-primary" onclick="fetch('/api/shutdown');window.close();">Close</button>
     </div>
   </div>
 </div>
 
+<!-- ====================== SETTINGS DASHBOARD ====================== -->
+<div class="dashboard" id="settings-view" style="display:none">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+    <h1>termai settings</h1>
+    <button class="btn btn-secondary btn-sm" onclick="fetch('/api/shutdown');window.close();">Close</button>
+  </div>
+  <div class="subtitle">Manage your AI model, allow list, prompt history, and configuration.</div>
+
+  <div class="tab-bar">
+    <button class="tab-btn active" onclick="switchTab('models', this)">Models</button>
+    <button class="tab-btn" onclick="switchTab('allowlist', this)">Allow List</button>
+    <button class="tab-btn" onclick="switchTab('history', this)">History</button>
+    <button class="tab-btn" onclick="switchTab('config', this)">Config</button>
+  </div>
+
+  <!-- Tab: Models -->
+  <div class="tab-content active" id="tab-models">
+    <h2>AI Models</h2>
+    <div class="subtitle">Switch your active model or download a new one.</div>
+    <div id="settings-model-list"></div>
+  </div>
+
+  <!-- Tab: Allow List -->
+  <div class="tab-content" id="tab-allowlist">
+    <h2>Command Allow List</h2>
+    <div class="subtitle">Commands on this list run without confirmation prompts.</div>
+
+    <div style="margin-bottom:20px">
+      <div style="font-weight:600;margin-bottom:8px">Your allowed commands</div>
+      <div id="user-allow-list"></div>
+      <div id="allow-empty" class="subtitle" style="display:none;margin-top:8px">No custom commands yet. Commands you approve with "a" (always allow) appear here.</div>
+      <div class="add-row">
+        <input type="text" class="add-input" id="add-cmd-input" placeholder="e.g. npm install, docker build, pip install" />
+        <button class="btn btn-primary btn-sm" onclick="addAllowedCmd()">Add</button>
+      </div>
+    </div>
+
+    <div>
+      <div style="font-weight:600;margin-bottom:4px">Built-in safe commands <span style="color:var(--fg-dim);font-weight:400;font-size:12px">(click to toggle)</span></div>
+      <div class="subtitle" style="margin-bottom:8px">Enabled commands auto-execute without prompting. Click to disable/enable.</div>
+      <div class="safe-list" id="safe-list"></div>
+    </div>
+  </div>
+
+  <!-- Tab: History -->
+  <div class="tab-content" id="tab-history">
+    <h2>Prompt History</h2>
+    <div class="subtitle">Commands generated and executed through termai.</div>
+    <div class="history-controls">
+      <select id="history-limit" onchange="renderHistory()">
+        <option value="20">Last 20</option>
+        <option value="50">Last 50</option>
+        <option value="100">Last 100</option>
+        <option value="500">All</option>
+      </select>
+      <select id="history-filter" onchange="renderHistory()">
+        <option value="all">All</option>
+        <option value="success">Succeeded</option>
+        <option value="failed">Failed</option>
+        <option value="with-prompt">With instruction</option>
+      </select>
+      <div style="flex:1"></div>
+      <button class="btn btn-secondary btn-sm" onclick="renderHistory()">Refresh</button>
+      <button class="btn btn-secondary btn-sm" style="color:var(--red);border-color:var(--red)" onclick="clearHistory()">Clear All</button>
+    </div>
+    <div id="history-list"></div>
+  </div>
+
+  <!-- Tab: Config -->
+  <div class="tab-content" id="tab-config">
+    <h2>Configuration</h2>
+    <div class="subtitle">Current settings from ~/.termai/config.toml</div>
+    <div class="card" id="config-display" style="font-family:'SF Mono',Menlo,Consolas,monospace;font-size:13px;line-height:2;white-space:pre"></div>
+    <div class="subtitle" style="margin-top:12px">Edit this file directly at <span style="color:var(--accent)">~/.termai/config.toml</span></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
 <script>
 const MODELS = {models_json};
+const CURRENT_MODEL = "{current_model}";
+let allowedCmds = {allowed_json};
+let safeCommands = {safe_json};
 let selectedModel = 0;
 let pollTimer = null;
+const showSettings = {show_settings};
+
+// Init: show wizard or settings
+if (showSettings) openSettings();
 
 function showStep(n) {{
   document.querySelectorAll('.step').forEach(s => s.classList.remove('active'));
   document.getElementById('step-' + n).classList.add('active');
 }}
 
-// Build model cards
+function openSettings() {{
+  document.getElementById('wizard-view').style.display = 'none';
+  document.getElementById('settings-view').style.display = 'block';
+  renderSettingsModels();
+  renderAllowList();
+  renderSafeList();
+  renderConfig();
+}}
+
+function switchTab(name, btn) {{
+  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  btn.classList.add('active');
+  if (name === 'history') renderHistory();
+}}
+
+function toast(msg) {{
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2000);
+}}
+
+// ---- Wizard: model cards ----
 (function() {{
   const list = document.getElementById('model-list');
   MODELS.forEach((m, i) => {{
@@ -267,72 +448,46 @@ function showStep(n) {{
     card.className = 'model-card' + (i === 0 ? ' selected' : '');
     card.onclick = () => {{
       selectedModel = i;
-      document.querySelectorAll('.model-card').forEach(c => c.classList.remove('selected'));
+      document.querySelectorAll('#model-list .model-card').forEach(c => c.classList.remove('selected'));
       card.classList.add('selected');
     }};
     const installed = m.installed ? '<span class="installed-tag">✓ installed</span>' : '';
-    card.innerHTML = `
-      <div class="top">
-        <span class="name">${{m.name}}${{installed}}</span>
-        <span class="badge badge-${{m.quality}}">${{m.quality}}</span>
-      </div>
-      <div class="meta">${{m.size_gb}} GB · ${{m.params}} params · min ${{m.min_ram}} RAM — ${{m.description}}</div>
-    `;
+    card.innerHTML = `<div class="top"><span class="name">${{m.name}}${{installed}}</span><span class="badge badge-${{m.quality}}">${{m.quality}}</span></div>
+      <div class="meta">${{m.size_gb}} GB · ${{m.params}} params · min ${{m.min_ram}} RAM — ${{m.description}}</div>`;
     list.appendChild(card);
   }});
-  // Skip option
   const skip = document.createElement('div');
   skip.className = 'model-card';
-  skip.onclick = () => {{
-    selectedModel = -1;
-    document.querySelectorAll('.model-card').forEach(c => c.classList.remove('selected'));
-    skip.classList.add('selected');
-  }};
+  skip.onclick = () => {{ selectedModel = -1; document.querySelectorAll('#model-list .model-card').forEach(c => c.classList.remove('selected')); skip.classList.add('selected'); }};
   skip.innerHTML = '<div class="name">Skip — no AI model (rule-based fallback only)</div><div class="meta">No download required</div>';
   list.appendChild(skip);
 }})();
 
+// ---- Wizard: install flow ----
 function startInstall() {{
   showStep(2);
-  fetch('/api/install', {{
-    method: 'POST',
-    headers: {{'Content-Type': 'application/json'}},
-    body: JSON.stringify({{ model_idx: selectedModel }})
-  }});
+  fetch('/api/install', {{ method: 'POST', headers: {{'Content-Type': 'application/json'}}, body: JSON.stringify({{ model_idx: selectedModel }}) }});
   pollTimer = setInterval(pollProgress, 400);
 }}
 
 function pollProgress() {{
   fetch('/api/progress').then(r => r.json()).then(s => {{
     document.getElementById('progress-fill').style.width = s.pct + '%';
-    document.getElementById('progress-pct').textContent =
-      s.total_mb > 0 ? s.downloaded_mb.toFixed(0) + ' / ' + s.total_mb.toFixed(0) + ' MB  (' + s.pct.toFixed(0) + '%)' : '';
-    document.getElementById('progress-speed').textContent =
-      s.speed ? s.speed + '   ' + s.eta : '';
+    document.getElementById('progress-pct').textContent = s.total_mb > 0 ? s.downloaded_mb.toFixed(0)+' / '+s.total_mb.toFixed(0)+' MB  ('+s.pct.toFixed(0)+'%)' : '';
+    document.getElementById('progress-speed').textContent = s.speed ? s.speed+'   '+s.eta : '';
     if (s.status) document.getElementById('install-status').textContent = s.status;
     if (s.title) document.getElementById('install-title').textContent = s.title;
-
     const box = document.getElementById('log-box');
     if (s.logs && s.logs.length > box.children.length) {{
       for (let i = box.children.length; i < s.logs.length; i++) {{
         const div = document.createElement('div');
         div.className = 'log-' + s.logs[i].level;
-        const prefix = s.logs[i].level === 'ok' ? '✓ ' : s.logs[i].level === 'err' ? '✗ ' : '  ';
-        div.textContent = prefix + s.logs[i].msg;
-        box.appendChild(div);
-        box.scrollTop = box.scrollHeight;
+        div.textContent = (s.logs[i].level==='ok'?'✓ ':s.logs[i].level==='err'?'✗ ':'  ') + s.logs[i].msg;
+        box.appendChild(div); box.scrollTop = box.scrollHeight;
       }}
     }}
-
-    if (s.done) {{
-      clearInterval(pollTimer);
-      setTimeout(() => showFinish(s), 500);
-    }}
-    if (s.error) {{
-      clearInterval(pollTimer);
-      document.getElementById('install-title').textContent = 'Installation failed';
-      document.getElementById('install-status').textContent = s.error;
-    }}
+    if (s.done) {{ clearInterval(pollTimer); setTimeout(() => showFinish(s), 500); }}
+    if (s.error) {{ clearInterval(pollTimer); document.getElementById('install-title').textContent = 'Installation failed'; document.getElementById('install-status').textContent = s.error; }}
   }});
 }}
 
@@ -340,20 +495,169 @@ function showFinish(s) {{
   const checks = document.getElementById('finish-checks');
   checks.innerHTML = '';
   (s.checks || []).forEach(c => {{
-    const cls = c.ok ? 'check-ok' : 'check-warn';
-    const icon = c.ok ? '✓' : '○';
-    checks.innerHTML += '<div class="check-item ' + cls + '"><span class="icon">' + icon + '</span> ' + c.label + '</div>';
+    checks.innerHTML += '<div class="check-item '+(c.ok?'check-ok':'check-warn')+'"><span class="icon">'+(c.ok?'✓':'○')+'</span> '+c.label+'</div>';
   }});
   showStep(3);
 }}
 
-// Heartbeat — tells the server the browser tab is still open
-setInterval(() => fetch('/api/heartbeat').catch(() => {{}}), 2000);
+// ---- Settings: Models ----
+function renderSettingsModels() {{
+  fetch('/api/models').then(r => r.json()).then(models => {{
+    const list = document.getElementById('settings-model-list');
+    list.innerHTML = '';
+    models.forEach((m, i) => {{
+      const card = document.createElement('div');
+      card.className = 'model-card';
+      const installed = m.installed ? '<span class="installed-tag">✓ installed</span>' : '';
+      const active = m.active ? '<span class="active-tag">● active</span>' : '';
+      let actionBtn = '';
+      if (m.active) {{
+        actionBtn = '<button class="btn btn-secondary btn-sm" disabled>Active</button>';
+      }} else if (m.installed) {{
+        actionBtn = `<button class="btn btn-primary btn-sm" onclick="switchModel(${{i}})">Switch to this</button>`;
+      }} else {{
+        actionBtn = `<button class="btn btn-primary btn-sm" onclick="downloadAndSwitch(${{i}})">Download &amp; activate</button>`;
+      }}
+      card.innerHTML = `<div class="top"><span class="name">${{m.name}}${{installed}}${{active}}</span><span class="badge badge-${{m.quality}}">${{m.quality}}</span></div>
+        <div class="meta">${{m.size_gb}} GB · ${{m.params}} params · min ${{m.min_ram}} RAM — ${{m.description}}</div>
+        <div style="margin-top:10px;text-align:right">${{actionBtn}}</div>`;
+      list.appendChild(card);
+    }});
+  }});
+}}
 
-// Shut down the server cleanly when the tab/window closes
-window.addEventListener('beforeunload', () => {{
-  navigator.sendBeacon('/api/shutdown');
+function switchModel(idx) {{
+  fetch('/api/switch-model', {{ method: 'POST', headers: {{'Content-Type':'application/json'}}, body: JSON.stringify({{model_idx: idx}}) }})
+    .then(r => r.json()).then(d => {{
+      if (d.ok) {{ toast('Switched to ' + d.name); renderSettingsModels(); }}
+      else toast('Error: ' + d.error);
+    }});
+}}
+
+function downloadAndSwitch(idx) {{
+  fetch('/api/download-model', {{ method: 'POST', headers: {{'Content-Type':'application/json'}}, body: JSON.stringify({{model_idx: idx}}) }})
+    .then(() => {{
+      toast('Downloading... this may take a few minutes');
+      const poll = setInterval(() => {{
+        fetch('/api/progress').then(r => r.json()).then(s => {{
+          if (s.done) {{ clearInterval(poll); toast('Download complete!'); renderSettingsModels(); }}
+        }});
+      }}, 2000);
+    }});
+}}
+
+// ---- Settings: Allow List ----
+function renderAllowList() {{
+  fetch('/api/allowlist').then(r => r.json()).then(data => {{
+    allowedCmds = data;
+    const list = document.getElementById('user-allow-list');
+    const empty = document.getElementById('allow-empty');
+    list.innerHTML = '';
+    if (data.length === 0) {{ empty.style.display = 'block'; return; }}
+    empty.style.display = 'none';
+    data.forEach(cmd => {{
+      const item = document.createElement('div');
+      item.className = 'allow-item';
+      item.innerHTML = `<span class="cmd">${{cmd}}</span><button class="remove-btn" onclick="removeAllowed('${{cmd.replace(/'/g, "\\\\'")}}')">✕</button>`;
+      list.appendChild(item);
+    }});
+  }});
+}}
+
+function addAllowedCmd() {{
+  const input = document.getElementById('add-cmd-input');
+  const cmd = input.value.trim();
+  if (!cmd) return;
+  fetch('/api/allowlist/add', {{ method: 'POST', headers: {{'Content-Type':'application/json'}}, body: JSON.stringify({{command: cmd}}) }})
+    .then(r => r.json()).then(() => {{ input.value = ''; renderAllowList(); toast('Added: ' + cmd); }});
+}}
+
+function removeAllowed(cmd) {{
+  fetch('/api/allowlist/remove', {{ method: 'POST', headers: {{'Content-Type':'application/json'}}, body: JSON.stringify({{command: cmd}}) }})
+    .then(r => r.json()).then(() => {{ renderAllowList(); toast('Removed: ' + cmd); }});
+}}
+
+function renderSafeList() {{
+  fetch('/api/safe-commands').then(r => r.json()).then(data => {{
+    safeCommands = data;
+    const list = document.getElementById('safe-list');
+    list.innerHTML = '';
+    Object.entries(data).sort((a,b) => a[0].localeCompare(b[0])).forEach(([cmd, enabled]) => {{
+      const chip = document.createElement('span');
+      chip.className = 'safe-chip ' + (enabled ? 'enabled' : 'disabled');
+      chip.textContent = cmd;
+      chip.onclick = () => toggleSafe(cmd, enabled);
+      list.appendChild(chip);
+    }});
+  }});
+}}
+
+function toggleSafe(cmd, currentlyEnabled) {{
+  const endpoint = currentlyEnabled ? '/api/safe-commands/disable' : '/api/safe-commands/enable';
+  fetch(endpoint, {{ method: 'POST', headers: {{'Content-Type':'application/json'}}, body: JSON.stringify({{command: cmd}}) }})
+    .then(r => r.json()).then(() => {{
+      toast((currentlyEnabled ? 'Disabled: ' : 'Enabled: ') + cmd);
+      renderSafeList();
+    }});
+}}
+
+// ---- Settings: Config ----
+function renderConfig() {{
+  fetch('/api/config').then(r => r.json()).then(cfg => {{
+    document.getElementById('config-display').textContent = Object.entries(cfg).map(([k,v]) => k + ' = ' + JSON.stringify(v)).join('\\n');
+  }});
+}}
+
+// ---- History ----
+let historyCache = null;
+async function loadHistory(limit) {{
+  const r = await fetch('/api/history?limit=' + limit);
+  historyCache = await r.json();
+}}
+async function renderHistory() {{
+  const limit = document.getElementById('history-limit').value;
+  const filter = document.getElementById('history-filter').value;
+  await loadHistory(limit);
+  let items = historyCache || [];
+  if (filter === 'success') items = items.filter(e => e.success === true);
+  else if (filter === 'failed') items = items.filter(e => e.success === false);
+  else if (filter === 'with-prompt') items = items.filter(e => e.instruction);
+  const container = document.getElementById('history-list');
+  if (!items.length) {{
+    container.innerHTML = '<div class="history-empty">No history entries found.</div>';
+    return;
+  }}
+  container.innerHTML = items.slice().reverse().map(e => {{
+    const ts = (e.timestamp || '').slice(0, 19).replace('T', ' ');
+    const statusCls = e.success === true ? 'status-ok' : (e.success === false ? 'status-fail' : '');
+    const statusTxt = e.success === true ? '✓' : (e.success === false ? '✗' : '?');
+    return `<div class="history-item">
+      <div class="cmd">${{e.command || '?'}}</div>
+      ${{e.instruction ? `<div class="instruction">Prompt: ${{e.instruction}}</div>` : ''}}
+      <div class="meta">
+        <span class="${{statusCls}}">${{statusTxt}}</span>
+        <span>${{ts}}</span>
+        <span>${{e.cwd || ''}}</span>
+      </div>
+    </div>`;
+  }}).join('');
+}}
+
+async function clearHistory() {{
+  if (!confirm('Clear all prompt history? This cannot be undone.')) return;
+  await fetch('/api/history/clear', {{method:'POST'}});
+  toast('History cleared');
+  renderHistory();
+}}
+
+// ---- Add-input enter key ----
+document.addEventListener('keydown', e => {{
+  if (e.key === 'Enter' && document.activeElement && document.activeElement.id === 'add-cmd-input') addAllowedCmd();
 }});
+
+// Heartbeat + cleanup
+setInterval(() => fetch('/api/heartbeat').catch(() => {{}}), 2000);
+window.addEventListener('beforeunload', () => navigator.sendBeacon('/api/shutdown'));
 </script>
 </body>
 </html>"""
@@ -374,6 +678,25 @@ class _WizardHandler(BaseHTTPRequestHandler):
         elif self.path == "/api/heartbeat":
             _WizardHandler.last_heartbeat = time.monotonic()
             self._respond(200, "text/plain", b"ok")
+        elif self.path == "/api/models":
+            self._respond(200, "application/json", json.dumps(_models_state()).encode())
+        elif self.path == "/api/allowlist":
+            self._respond(200, "application/json", json.dumps(sorted(get_permanent_list())).encode())
+        elif self.path == "/api/config":
+            cfg = get_config()
+            data = {"model": cfg.model, "device": cfg.device,
+                    "max_tokens": cfg.max_tokens, "temperature": cfg.temperature,
+                    "config_file": str(CONFIG_FILE)}
+            self._respond(200, "application/json", json.dumps(data).encode())
+        elif self.path.startswith("/api/history"):
+            from urllib.parse import urlparse, parse_qs
+            qs = parse_qs(urlparse(self.path).query)
+            limit = int(qs.get("limit", ["50"])[0])
+            from termai.logger import read_history
+            entries = read_history(limit)
+            self._respond(200, "application/json", json.dumps(entries).encode())
+        elif self.path == "/api/safe-commands":
+            self._respond(200, "application/json", json.dumps(get_safe_commands()).encode())
         elif self.path == "/api/shutdown":
             self._respond(200, "text/plain", b"bye")
             threading.Thread(target=self._shutdown, daemon=True).start()
@@ -381,17 +704,83 @@ class _WizardHandler(BaseHTTPRequestHandler):
             self._respond(404, "text/plain", b"not found")
 
     def do_POST(self) -> None:
+        body = self._read_body()
+
         if self.path == "/api/install":
-            length = int(self.headers.get("Content-Length", 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
             model_idx = body.get("model_idx", -1)
             self._respond(200, "application/json", b'{"ok":true}')
             threading.Thread(target=_run_install, args=(model_idx,), daemon=True).start()
+
+        elif self.path == "/api/switch-model":
+            idx = body.get("model_idx", -1)
+            if 0 <= idx < len(CATALOG):
+                m = CATALOG[idx]
+                if (MODEL_DIR / m.filename).exists():
+                    from termai.models import _save_model_choice
+                    _save_model_choice(m.filename)
+                    # Reset cached config
+                    import termai.config as _cfg
+                    _cfg._config = None
+                    self._respond(200, "application/json",
+                                  json.dumps({"ok": True, "name": m.name}).encode())
+                else:
+                    self._respond(200, "application/json",
+                                  json.dumps({"ok": False, "error": "Model not downloaded"}).encode())
+            else:
+                self._respond(400, "application/json", b'{"ok":false,"error":"Invalid index"}')
+
+        elif self.path == "/api/download-model":
+            idx = body.get("model_idx", -1)
+            if 0 <= idx < len(CATALOG):
+                self._respond(200, "application/json", b'{"ok":true}')
+                threading.Thread(target=_download_and_switch, args=(idx,), daemon=True).start()
+            else:
+                self._respond(400, "application/json", b'{"ok":false}')
+
+        elif self.path == "/api/allowlist/add":
+            cmd = body.get("command", "")
+            if cmd:
+                add_to_permanent(cmd)
+            self._respond(200, "application/json", b'{"ok":true}')
+
+        elif self.path == "/api/allowlist/remove":
+            cmd = body.get("command", "")
+            if cmd:
+                remove_from_permanent(cmd)
+            self._respond(200, "application/json", b'{"ok":true}')
+
+        elif self.path == "/api/safe-commands/disable":
+            cmd = body.get("command", "")
+            if cmd:
+                disable_safe_command(cmd)
+            self._respond(200, "application/json", b'{"ok":true}')
+
+        elif self.path == "/api/safe-commands/enable":
+            cmd = body.get("command", "")
+            if cmd:
+                enable_safe_command(cmd)
+            self._respond(200, "application/json", b'{"ok":true}')
+
+        elif self.path == "/api/history/clear":
+            from termai.logger import LOG_FILE
+            try:
+                LOG_FILE.write_text("")
+            except OSError:
+                pass
+            self._respond(200, "application/json", b'{"ok":true}')
+
         elif self.path == "/api/shutdown":
             self._respond(200, "text/plain", b"bye")
             threading.Thread(target=self._shutdown, daemon=True).start()
+
         else:
             self._respond(404, "text/plain", b"not found")
+
+    def _read_body(self) -> dict:
+        length = int(self.headers.get("Content-Length", 0))
+        if length:
+            return json.loads(self.rfile.read(length))
+        return {}
 
     def _respond(self, code: int, ctype: str, body: bytes) -> None:
         self.send_response(code)
@@ -406,22 +795,19 @@ class _WizardHandler(BaseHTTPRequestHandler):
             self.server_ref.shutdown()
 
     def log_message(self, format, *args) -> None:
-        pass  # silence request logs
+        pass
 
 
-# -- Installation logic -------------------------------------------------------
+# -- Installation / download logic -------------------------------------------
 
 def _run_install(model_idx: int) -> None:
     _download_state.update(
         active=True, cancelled=False, pct=0, downloaded_mb=0,
         total_mb=0, speed="", eta="", done=False, error="",
-        logs=[], title="Installing binary...", status="Copying to PATH",
-        checks=[],
+        logs=[], title="Installing binary...", status="Copying to PATH", checks=[],
     )
-
     try:
         _do_install_binary()
-
         if model_idx >= 0:
             model = CATALOG[model_idx]
             if (MODEL_DIR / model.filename).exists():
@@ -430,7 +816,6 @@ def _run_install(model_idx: int) -> None:
                 _download_state["title"] = f"Downloading {model.name}"
                 _download_state["status"] = f"{model.size_gb:.1f} GB — this may take a few minutes"
                 _download_model(model)
-
             _save_model_choice(model.filename)
         else:
             _log("Skipped model — using rule-based fallback", "dim")
@@ -446,18 +831,31 @@ def _run_install(model_idx: int) -> None:
         if model_idx >= 0:
             m = CATALOG[model_idx]
             checks.append({"label": f"AI Model ({m.name})", "ok": (MODEL_DIR / m.filename).exists()})
-
         _download_state["checks"] = checks
         _download_state["done"] = True
-
     except Exception as e:
         _download_state["error"] = str(e)
         _log(f"Error: {e}", "err")
 
 
+def _download_and_switch(idx: int) -> None:
+    _download_state.update(
+        active=True, pct=0, downloaded_mb=0, total_mb=0,
+        speed="", eta="", done=False, error="", logs=[],
+    )
+    try:
+        model = CATALOG[idx]
+        _download_model(model)
+        _save_model_choice(model.filename)
+        import termai.config as _cfg
+        _cfg._config = None
+        _download_state["done"] = True
+    except Exception as e:
+        _download_state["error"] = str(e)
+
+
 def _do_install_binary() -> None:
     is_frozen = getattr(sys, "frozen", False)
-
     if not is_frozen:
         which = shutil.which("termai")
         if which:
@@ -467,7 +865,6 @@ def _do_install_binary() -> None:
         return
 
     current_exe = Path(sys.executable)
-
     if platform.system() == "Windows":
         install_dir = Path.home() / "AppData" / "Local" / "Programs" / "termai"
         dest = install_dir / "termai.exe"
@@ -495,7 +892,6 @@ def _do_install_binary() -> None:
     dest = INSTALL_DIRS_UNIX[0] / "termai"
     tai_dest = INSTALL_DIRS_UNIX[0] / "tai"
     _log(f"Installing to {INSTALL_DIRS_UNIX[0]} (admin required)", "dim")
-
     if platform.system() == "Darwin":
         script = (
             f'do shell script "cp {current_exe} {dest} && '
@@ -507,7 +903,6 @@ def _do_install_binary() -> None:
         subprocess.run(["sudo", "cp", str(current_exe), str(dest)], check=True)
         subprocess.run(["sudo", "chmod", "+x", str(dest)], check=True)
         subprocess.run(["sudo", "ln", "-sf", str(dest), str(tai_dest)], check=True)
-
     _log(f"Installed to {dest}", "ok")
     _log("Created tai symlink", "ok")
 
@@ -517,21 +912,17 @@ def _download_model(model) -> None:
     url = MODEL_BASE_URL + model.filename
     dest = MODEL_DIR / model.filename
     tmp = dest.with_suffix(".part")
-
     _log(f"Downloading from {url}", "dim")
-
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "termai/0.1"})
         resp = urllib.request.urlopen(req, timeout=30)
     except Exception as e:
         _log(f"Download failed: {e}", "err")
         raise
-
     total = int(resp.headers.get("Content-Length", 0))
     downloaded = 0
     chunk_size = 256 * 1024
     start_time = time.monotonic()
-
     try:
         with open(tmp, "wb") as f:
             while True:
@@ -541,11 +932,9 @@ def _download_model(model) -> None:
                 f.write(chunk)
                 downloaded += len(chunk)
                 _update_progress(downloaded, total, start_time)
-
         tmp.rename(dest)
         _download_state["pct"] = 100
         _log(f"Model saved to {dest}", "ok")
-
     except Exception:
         tmp.unlink(missing_ok=True)
         raise
@@ -555,27 +944,19 @@ def _update_progress(downloaded: int, total: int, start_time: float) -> None:
     elapsed = max(time.monotonic() - start_time, 0.001)
     speed_bps = downloaded / elapsed
     pct = (downloaded / total * 100) if total > 0 else 0
-
     if speed_bps > 1e6:
         speed = f"{speed_bps / 1e6:.1f} MB/s"
     elif speed_bps > 1e3:
         speed = f"{speed_bps / 1e3:.0f} KB/s"
     else:
         speed = f"{speed_bps:.0f} B/s"
-
     if total > 0 and speed_bps > 0:
         remaining = (total - downloaded) / speed_bps
         eta = f"~{remaining / 60:.0f} min left" if remaining > 60 else f"~{remaining:.0f}s left"
     else:
         eta = ""
-
-    _download_state.update(
-        pct=round(pct, 1),
-        downloaded_mb=round(downloaded / 1e6, 1),
-        total_mb=round(total / 1e6, 1),
-        speed=speed,
-        eta=eta,
-    )
+    _download_state.update(pct=round(pct, 1), downloaded_mb=round(downloaded / 1e6, 1),
+                           total_mb=round(total / 1e6, 1), speed=speed, eta=eta)
 
 
 def _save_model_choice(filename: str) -> None:
@@ -592,7 +973,6 @@ def _do_setup_config() -> None:
         _log(f"Created config at {CONFIG_FILE}", "ok")
     else:
         _log("Config already exists", "ok")
-
     plugins_dir = CONFIG_DIR / "plugins"
     plugins_dir.mkdir(exist_ok=True)
     _log("Plugin directory ready", "ok")
@@ -601,7 +981,6 @@ def _do_setup_config() -> None:
 # -- Entry point --------------------------------------------------------------
 
 def _heartbeat_watchdog(server: HTTPServer, handler_cls: type) -> None:
-    """Shut down the server if no heartbeat is received for 8 seconds."""
     while True:
         time.sleep(3)
         last = handler_cls.last_heartbeat
@@ -611,9 +990,13 @@ def _heartbeat_watchdog(server: HTTPServer, handler_cls: type) -> None:
             return
 
 
-def run_gui_wizard() -> None:
-    """Launch the browser-based wizard on a random local port."""
-    page = _build_html()
+def run_gui_wizard(mode: str = "auto") -> None:
+    """Launch the browser-based UI.
+
+    mode: "auto" (wizard if first run, settings if installed),
+          "wizard" (force wizard), "settings" (force settings).
+    """
+    page = _build_html(mode=mode)
 
     handler = type("Handler", (_WizardHandler,), {
         "html_page": page,
@@ -626,7 +1009,8 @@ def run_gui_wizard() -> None:
 
     threading.Thread(target=_heartbeat_watchdog, args=(server, handler), daemon=True).start()
 
-    print(f"[termai] Opening setup wizard at {url}")
+    label = "settings" if (mode == "settings" or (mode == "auto" and _is_installed())) else "setup wizard"
+    print(f"[termai] Opening {label} at {url}")
     webbrowser.open(url)
     server.serve_forever()
-    print("[termai] Wizard closed.")
+    print("[termai] Closed.")

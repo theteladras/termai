@@ -22,10 +22,12 @@ from pathlib import Path
 from termai.config import CONFIG_DIR
 
 ALLOWED_FILE = CONFIG_DIR / "allowed.json"
+DISABLED_BUILTINS_FILE = CONFIG_DIR / "disabled_builtins.json"
 
-# Commands that are inherently read-only or harmless.
-# Matched against the first token (the binary name) of the command.
-_SAFE_PREFIXES: set[str] = {
+# Default set of read-only / harmless commands.
+# Users can disable individual entries via the settings UI;
+# disabled entries are persisted in ``disabled_builtins.json``.
+_DEFAULT_SAFE_PREFIXES: set[str] = {
     # filesystem inspection
     "ls", "ll", "la", "exa", "eza", "tree", "find", "locate",
     "stat", "file", "wc", "du", "df",
@@ -62,6 +64,11 @@ _SAFE_PREFIXES: set[str] = {
 
 # Session-scoped allow list (not persisted)
 _session_allowed: set[str] = set()
+
+
+def _get_active_safe_prefixes() -> set[str]:
+    """Active safe prefixes = defaults minus user-disabled ones."""
+    return _DEFAULT_SAFE_PREFIXES - _load_disabled_builtins()
 
 
 def should_auto_execute(command: str) -> bool:
@@ -112,6 +119,26 @@ def remove_from_permanent(command: str) -> bool:
     return False
 
 
+def get_safe_commands() -> dict[str, bool]:
+    """Return all default safe prefixes with their enabled state."""
+    disabled = _load_disabled_builtins()
+    return {cmd: cmd not in disabled for cmd in sorted(_DEFAULT_SAFE_PREFIXES)}
+
+
+def disable_safe_command(command: str) -> None:
+    """Disable a built-in safe command (it will require confirmation)."""
+    disabled = _load_disabled_builtins()
+    disabled.add(command)
+    _save_disabled_builtins(disabled)
+
+
+def enable_safe_command(command: str) -> None:
+    """Re-enable a previously disabled built-in safe command."""
+    disabled = _load_disabled_builtins()
+    disabled.discard(command)
+    _save_disabled_builtins(disabled)
+
+
 # -- Internals ----------------------------------------------------------------
 
 def _normalize(command: str) -> str:
@@ -129,9 +156,9 @@ def _normalize(command: str) -> str:
 
 
 def _is_builtin_safe(command: str) -> bool:
-    """Check if the command matches any built-in safe prefix."""
+    """Check if the command matches any active built-in safe prefix."""
     cmd_lower = command.lower()
-    for prefix in _SAFE_PREFIXES:
+    for prefix in _get_active_safe_prefixes():
         if cmd_lower == prefix or cmd_lower.startswith(prefix + " "):
             return True
     return False
@@ -161,5 +188,23 @@ def _save_user_allowed(allowed: set[str]) -> None:
     try:
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         ALLOWED_FILE.write_text(json.dumps(sorted(allowed), indent=2) + "\n")
+    except OSError:
+        pass
+
+
+def _load_disabled_builtins() -> set[str]:
+    if not DISABLED_BUILTINS_FILE.exists():
+        return set()
+    try:
+        data = json.loads(DISABLED_BUILTINS_FILE.read_text())
+        return set(data) if isinstance(data, list) else set()
+    except (json.JSONDecodeError, OSError):
+        return set()
+
+
+def _save_disabled_builtins(disabled: set[str]) -> None:
+    try:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        DISABLED_BUILTINS_FILE.write_text(json.dumps(sorted(disabled), indent=2) + "\n")
     except OSError:
         pass
