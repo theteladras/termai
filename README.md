@@ -8,44 +8,83 @@ A local AI-powered terminal assistant that converts natural language into shell 
 - **Context-aware** — knows your OS, shell, cwd, git branch, package manager, and recent commands
 - **Interactive chat mode** — multi-turn conversation in your terminal with `/help`, `/history`, `/context`, `/clear`
 - **Offline operation** — uses a local LLM (GPT4All: Phi-3, Mistral, LLaMA) with automatic fallback
+- **Standalone executable** — single-file binary for macOS, Linux, and Windows (no Python required)
+- **Interactive model setup** — pick from curated models on first run
 - **Command logging** — full audit trail in `~/.termai/history.jsonl`
 - **Plugin system** — extend with custom slash commands and execution hooks
 - **Configurable** — TOML config file, CLI flags, and environment variables
 
 ## Quick Start
 
+### Option 1: Download the executable (recommended)
+
+Download the latest binary from [Releases](../../releases) for your platform — no Python needed.
+
 ```bash
-# Install in editable mode (also installs gpt4all)
+# macOS / Linux
+chmod +x termai
+./termai --setup       # pick and download an AI model
+./termai "list files"  # start using it
+```
+
+### Option 2: Install from source
+
+```bash
 pip install -e .
 
 # Or use the install script (adds shell aliases too)
 bash scripts/install.sh
+```
 
-# One-shot mode
-termai "find all Python files modified today"
+Then set up a model:
 
-# Dry-run (preview only, no execution)
-termai --dry-run "delete temp files"
-
-# Interactive chat
-termai --chat
-
-# View command history
-termai --history
+```bash
+termai --setup
 ```
 
 ## Usage
 
 ```
 termai "your instruction"          # generate & preview a command
+termai -y "your instruction"       # skip confirmation, execute immediately
 termai --dry-run "instruction"     # preview only
 termai --chat                      # interactive mode
 termai --history                   # show recent history
 termai --history 50                # show last 50 commands
+termai --setup                     # pick and download an AI model
+termai --list-models               # show available models
 termai --model Mistral-7B-...      # use a specific model
 termai --device gpu                # run model on GPU
 termai --init-config               # create ~/.termai/config.toml
 ```
+
+`tai` works as a short alias for `termai`:
+
+```bash
+tai -y "show disk usage"
+tai --chat
+```
+
+## Model Setup
+
+On first run, termai uses a rule-based fallback that works instantly with no downloads. For full AI-powered generation, run the interactive model selector:
+
+```
+$ termai --setup
+
+  Available models:
+
+  #    Name                     Size       Params   RAM      Quality
+  ──── ──────────────────────── ────────── ──────── ──────── ────────
+  1    Phi-3 Mini               2.2 GB     3.8B     8 GB     Good
+  2    Orca Mini 3B             2.0 GB     3B       8 GB     Basic
+  3    Mistral 7B Instruct      4.1 GB     7B       8 GB     Better
+  4    LLaMA 3 8B Instruct      4.7 GB     8B       16 GB    Best
+
+  Select a model [1-4, 0 to skip]:
+```
+
+Models are downloaded once and stored in `~/.cache/gpt4all/`.
 
 ## Interactive Chat
 
@@ -81,6 +120,22 @@ temperature = 0.2
 
 Environment variables override config: `TERMAI_MODEL`, `TERMAI_DEVICE`, `TERMAI_MAX_TOKENS`, `TERMAI_PLUGIN_DIR`.
 
+## Building Standalone Executables
+
+```bash
+pip install -e ".[dev]"
+
+# Standard build (~15-30 MB)
+python build.py
+
+# Fat build with bundled model (~2+ GB, fully offline)
+python build.py --bundle-model
+
+# Output: dist/termai (or dist/termai.exe on Windows)
+```
+
+Builds are also automated via GitHub Actions — push a `v*` tag to create a release with binaries for all platforms.
+
 ## Plugins
 
 Place Python files in `~/.termai/plugins/`. Each must define a `register(registry)` function:
@@ -109,12 +164,14 @@ termai/
 ├── config.py        # TOML config and env var management
 ├── context.py       # Session context (OS, shell, cwd, git, env)
 ├── model.py         # Local LLM wrapper (GPT4All)
+├── models.py        # Model catalog and interactive selector
 ├── generator.py     # Natural language → shell command
 ├── executor.py      # Command preview, safety checks, execution
 ├── safety.py        # Destructive command detection & warnings
 ├── chat.py          # Interactive chat REPL
 ├── logger.py        # Command history logging (JSONL)
 └── plugins.py       # Plugin system (slash commands, hooks)
+build.py             # PyInstaller build script
 ```
 
 ## Development
