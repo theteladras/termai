@@ -52,13 +52,18 @@ Double-clicking the executable also opens the wizard. It will:
 
 After that, just use `termai` or `tai` from anywhere.
 
-### Option 2: Install from source
+### Option 2: Build from source
 
 ```bash
-pip install -e .
-termai --install       # terminal-based wizard
-# or
-termai --gui           # browser-based wizard
+pip install -e ".[dev]"
+python build.py --clean
+```
+
+The executable is output to `dist/termai` (or `dist/termai.exe` on Windows). From there:
+
+```bash
+./dist/termai              # opens the GUI setup wizard in your browser
+./dist/termai --install    # terminal-based wizard (no browser)
 ```
 
 ## Usage
@@ -75,7 +80,6 @@ termai --history 50                # show last 50 commands
 ### Setup & Configuration
 
 ```
-termai --gui                       # browser-based setup wizard
 termai --settings                  # settings dashboard (models, allow list, config)
 termai --install                   # terminal-based setup wizard
 termai --setup                     # terminal model selector
@@ -135,11 +139,11 @@ termai includes a browser-based GUI with zero dependencies — no Tkinter, no El
   - **History** — browse, filter, and clear your prompt history
   - **Config** — view current settings
 
-The GUI auto-launches when double-clicking the standalone executable. From the terminal:
+The GUI auto-launches when running the standalone executable with no arguments (or double-clicking it). From the terminal:
 
 ```bash
-termai --gui          # force the setup wizard
-termai --settings     # go straight to settings
+termai                # opens the setup wizard (default when no args)
+termai --settings     # go straight to the settings dashboard
 ```
 
 ## Model Setup
