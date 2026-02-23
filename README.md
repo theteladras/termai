@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="assets/logo.png" alt="termai logo" width="200" />
+  <img src="assets/logo.png" alt="termai logo" width="450" />
 </p>
 
-# termai
+# Termai
 
 A local AI-powered terminal assistant that converts natural language into shell commands — safely.
 
