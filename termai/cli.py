@@ -112,11 +112,102 @@ def build_parser() -> argparse.ArgumentParser:
         help="Override the remote AI provider for this run",
     )
     parser.add_argument(
+        "--info",
+        action="store_true",
+        help="Show current AI model and configuration status",
+    )
+    parser.add_argument(
         "--version",
         action="version",
         version=f"%(prog)s {__version__}",
     )
     return parser
+
+
+CYAN = "\033[1;36m"
+GREEN = "\033[1;32m"
+YELLOW = "\033[0;33m"
+RED = "\033[1;31m"
+BOLD = "\033[1m"
+DIM = "\033[2m"
+RESET = "\033[0m"
+
+
+def _print_info() -> None:
+    """Show current AI model and configuration status."""
+    from termai.config import get_config, CONFIG_FILE
+    from termai.model import LocalModel, MODEL_DIR
+    from termai.remote import get_remote_provider
+
+    cfg = get_config()
+
+    print(f"\n  {BOLD}termai v{__version__}{RESET}")
+    print(f"  {'─' * 40}")
+
+    # Local model
+    print(f"\n  {BOLD}Local AI{RESET}")
+    model_path = MODEL_DIR / cfg.model
+    if model_path.exists():
+        size_mb = model_path.stat().st_size / (1024 * 1024)
+        print(f"  {GREEN}●{RESET} {cfg.model}")
+        print(f"    {DIM}Size: {size_mb:.0f} MB | Device: {cfg.device} | Tokens: {cfg.max_tokens}{RESET}")
+    else:
+        print(f"  {RED}●{RESET} {cfg.model} {DIM}(not installed){RESET}")
+        print(f"    {DIM}Run: termai --setup{RESET}")
+
+    # Remote AI
+    print(f"\n  {BOLD}Remote AI{RESET}")
+    remote = get_remote_provider()
+    if remote and remote.is_available():
+        provider_name = cfg.remote_provider.capitalize()
+        model_name = cfg.remote_model or "(default)"
+        key_hint = "configured"
+        print(f"  {GREEN}●{RESET} {provider_name}: {model_name}")
+        print(f"    {DIM}API key: {key_hint} | Timeout: {cfg.remote_timeout}s{RESET}")
+    else:
+        print(f"  {DIM}●{RESET} Not configured")
+        print(f"    {DIM}Run: termai --settings{RESET}")
+
+    # Config file
+    print(f"\n  {BOLD}Config{RESET}")
+    if CONFIG_FILE.exists():
+        print(f"  {DIM}{CONFIG_FILE}{RESET}")
+    else:
+        print(f"  {DIM}No config file (using defaults){RESET}")
+
+    print()
+
+
+_COMMON_SHORT_WORDS = {
+    "a", "i", "an", "as", "at", "be", "by", "do", "go", "if", "in", "is",
+    "it", "me", "my", "no", "of", "on", "or", "so", "to", "up", "us", "we",
+}
+
+
+def _check_truncation(instruction: str) -> str:
+    """Detect if the instruction was likely truncated by a shell line wrap.
+
+    If the last word looks like a partial word (1-2 chars, not a common
+    short word), prompt the user to complete or re-enter it.
+    """
+    words = instruction.split()
+    if not words:
+        return instruction
+
+    last = words[-1].lower()
+    if len(last) <= 2 and last not in _COMMON_SHORT_WORDS and len(words) >= 4:
+        print(f"\n  {YELLOW}[termai]{RESET} Your instruction might be cut off "
+              f"(ends with \"{words[-1]}\").")
+        print(f"  {DIM}This can happen when the terminal wraps a long line.{RESET}")
+        try:
+            rest = input(f"  {BOLD}Continue typing (or Enter to use as-is):{RESET} ").strip()
+        except (KeyboardInterrupt, EOFError):
+            print(f"\n  {DIM}Cancelled.{RESET}")
+            sys.exit(0)
+        if rest:
+            instruction = f"{instruction}{rest}"
+            print(f"  {DIM}Full instruction: {instruction}{RESET}")
+    return instruction
 
 
 def _should_auto_gui() -> bool:
@@ -178,6 +269,10 @@ def main() -> None:
         run_uninstall()
         return
 
+    if args.info:
+        _print_info()
+        return
+
     if args.history is not None:
         print_history(limit=args.history)
         return
@@ -199,6 +294,9 @@ def main() -> None:
     elif args.local:
         set_force_mode("local")
 
+    from termai.session import cleanup_stale_sessions
+    cleanup_stale_sessions()
+
     ctx = SessionContext()
 
     if args.chat:
@@ -208,6 +306,10 @@ def main() -> None:
     if not instruction:
         parser.print_help()
         sys.exit(1)
+
+    instruction = _check_truncation(instruction)
+
+    ctx.set_current_instruction(instruction)
 
     if is_multistep(instruction):
         plan = generate_plan(instruction, ctx)

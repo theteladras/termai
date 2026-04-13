@@ -34,6 +34,49 @@ BOLD = "\033[1m"
 DIM = "\033[2m"
 RESET = "\033[0m"
 
+_PLACEHOLDER_RE = re.compile(
+    r"YOUR_[A-Z_]+"
+    r"|<[A-Z][A-Z_]*>"
+    r"|\{[A-Z][A-Z_]*\}"
+    r"|REPLACE_[A-Z_]+"
+    r"|INSERT_[A-Z_]+"
+    r"|xxx+",
+    re.IGNORECASE,
+)
+
+
+def _resolve_placeholders(command: str) -> str | None:
+    """Detect placeholders in a command and prompt the user to fill them.
+
+    Returns the resolved command, or None if the user cancels.
+    """
+    placeholders = list(dict.fromkeys(_PLACEHOLDER_RE.findall(command)))
+    if not placeholders:
+        return command
+
+    print(f"\n  {YELLOW}This command contains placeholder(s) that need values:{RESET}")
+    for ph in placeholders:
+        print(f"    {BOLD}•{RESET} {CYAN}{ph}{RESET}")
+    print(f"  {DIM}(press Enter with no value or Ctrl+C to cancel){RESET}")
+
+    print()
+    replacements: dict[str, str] = {}
+    for ph in placeholders:
+        try:
+            value = input(f"  {BOLD}{ph}{RESET} → ").strip()
+        except (KeyboardInterrupt, EOFError):
+            print(f"\n  {DIM}Cancelled.{RESET}")
+            return None
+        if not value:
+            print(f"  {DIM}Cancelled.{RESET}")
+            return None
+        replacements[ph] = value
+
+    for ph, value in replacements.items():
+        command = command.replace(ph, value)
+
+    return command
+
 
 def preview_and_execute(
     command: str,
@@ -56,6 +99,17 @@ def preview_and_execute(
     for line in command.splitlines():
         print(f"  {border_color}│{RESET}  {line}")
     print(f"  {border_color}└───────────────────────────────────────{RESET}")
+
+    resolved = _resolve_placeholders(command)
+    if resolved is None:
+        return None
+    if resolved != command:
+        command = resolved
+        warnings = check_command(command)
+        print(f"\n  {GREEN}┌─ Resolved Command ────────────────────{RESET}")
+        for line in command.splitlines():
+            print(f"  {GREEN}│{RESET}  {line}")
+        print(f"  {GREEN}└───────────────────────────────────────{RESET}")
 
     if warnings:
         print()
@@ -171,6 +225,10 @@ def run_command(
     ctx.record(command)
     ctx.refresh_cwd()
     log_command(command, instruction=instruction, success=success)
+
+    if instruction:
+        from termai.session import save_interaction
+        save_interaction(instruction, command, success=success)
 
     registry = get_registry()
     registry.run_post_hooks(command, ctx)

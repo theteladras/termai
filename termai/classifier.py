@@ -2,6 +2,10 @@
 
 Determines whether an instruction should be handled locally or
 delegated to a remote AI provider based on heuristics.
+
+The classifier is intentionally aggressive about delegating to remote —
+it's better to use the smarter model and get the right command than to
+save an API call and get a wrong one.
 """
 
 from __future__ import annotations
@@ -11,6 +15,13 @@ import re
 _MULTI_STEP_MARKERS = re.compile(
     r"\b(and then|after that|followed by|next|finally|first .* then|step \d)"
     r"\b", re.IGNORECASE
+)
+
+_MULTI_PART_RE = re.compile(
+    r"\b(and\s+(?:also\s+)?(?:what|show|list|check|find|get|tell|display|then))"
+    r"|\b(what\s+are\s+the\b.*\band\b)"
+    r"|\b\band\b.*\b(what|which|where|how|who)\b",
+    re.IGNORECASE,
 )
 
 _COMPLEX_DOMAIN_KEYWORDS = {
@@ -27,11 +38,20 @@ _COMPLEX_DOMAIN_KEYWORDS = {
     "script", "bash script", "shell script",
 }
 
-_SIMPLE_PATTERNS = {
-    "list", "show", "print", "display", "check",
-    "what is", "who am i", "where am i",
-    "version", "status", "help",
-}
+_SIMPLE_PATTERNS = (
+    "list ", "show ", "print ", "display ",
+    "version", "status", "help", "pwd", "whoami",
+    "who am i", "where am i", "what time",
+)
+
+_QUALITY_RED_FLAGS = re.compile(
+    r"<\|endoftext\|>"
+    r"|\bAnswer:\b"
+    r"|\b(home|HOME)/\w+/"
+    r"|\$\(home/"
+    r"|[A-D]\.\s+\w",
+    re.IGNORECASE,
+)
 
 
 def classify(instruction: str, local_result: str | None, *, from_fallback: bool = False) -> str:
@@ -54,21 +74,25 @@ def classify(instruction: str, local_result: str | None, *, from_fallback: bool 
     if from_fallback and not local_result:
         return "remote"
 
+    if local_result and _QUALITY_RED_FLAGS.search(local_result):
+        return "remote"
+
     if _is_simple(lower):
         return "local"
 
     score = _complexity_score(lower, local_result, from_fallback)
-    return "remote" if score >= 3 else "local"
+    return "remote" if score >= 2 else "local"
 
 
 def _is_simple(instruction: str) -> bool:
-    """Quick check for obviously simple instructions."""
+    """Quick check for obviously simple, single-purpose instructions."""
     words = instruction.split()
-    if len(words) <= 3:
+    if len(words) <= 2:
         return True
     for pattern in _SIMPLE_PATTERNS:
         if instruction.startswith(pattern):
-            return True
+            if " and " not in instruction:
+                return True
     return False
 
 
@@ -76,13 +100,21 @@ def _complexity_score(instruction: str, local_result: str | None, from_fallback:
     """Compute a complexity score. Higher = more likely to need remote AI."""
     score = 0
 
-    if len(instruction) > 100:
+    if len(instruction) > 80:
         score += 1
-    if len(instruction) > 200:
+    if len(instruction) > 150:
         score += 1
 
     if _MULTI_STEP_MARKERS.search(instruction):
         score += 2
+
+    if _MULTI_PART_RE.search(instruction):
+        score += 2
+
+    if " and " in instruction.lower():
+        parts = instruction.lower().split(" and ")
+        if len(parts) >= 2 and all(len(p.strip().split()) >= 2 for p in parts):
+            score += 1
 
     words = instruction.lower().split()
     verb_count = sum(1 for w in words if w in {
@@ -103,5 +135,11 @@ def _complexity_score(instruction: str, local_result: str | None, from_fallback:
 
     if from_fallback:
         score += 2
+
+    if local_result and _QUALITY_RED_FLAGS.search(local_result):
+        score += 2
+
+    if len(words) >= 8:
+        score += 1
 
     return score

@@ -115,7 +115,30 @@ class SessionContext:
 
         recent = self.history[-5:] if self.history else ["(none)"]
         parts.append(f"Recent commands: {'; '.join(recent)}")
+
+        from termai.session import load_history, format_history_for_prompt
+        terminal_history = format_history_for_prompt(
+            load_history(), current_instruction=self._current_instruction,
+        )
+        if terminal_history:
+            parts.append("")
+            parts.append(terminal_history)
+
+        if self._current_instruction:
+            from termai.memory import find_similar_examples, format_examples_for_prompt
+            examples = find_similar_examples(self._current_instruction)
+            examples_text = format_examples_for_prompt(examples)
+            if examples_text:
+                parts.append("")
+                parts.append(examples_text)
+
         return "\n".join(parts)
+
+    def set_current_instruction(self, instruction: str) -> None:
+        """Set the current instruction so it's excluded from session history."""
+        self._current_instruction = instruction
+
+    _current_instruction: str = ""
 
     def as_system_prompt(self) -> str:
         """Full system prompt fed to the LLM before each generation."""
@@ -130,6 +153,13 @@ class SessionContext:
             "3. Prefer safe, non-destructive approaches when possible.\n"
             "4. If the task is ambiguous, pick the most common interpretation.\n"
             "5. Never fabricate flags or options — use only real ones.\n"
+            "6. Use the recent interaction history to resolve contextual references "
+            "(e.g. 'in it', 'that file', 'the same directory'). When the user refers "
+            "to something from a previous interaction, use the paths and context from "
+            "that prior command.\n"
+            "7. If the instruction has multiple parts (e.g. 'check X and show Y'), "
+            "combine them into a single compound command using && or ; so ALL parts "
+            "are addressed. Never silently drop part of the request.\n"
             "\n"
             "--- System Context ---\n"
             f"{self.summary()}\n"

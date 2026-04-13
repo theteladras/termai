@@ -26,63 +26,42 @@ RESET = "\033[0m"
 
 _GREETING_RE = re.compile(
     r"^(hi|hello|hey|sup|yo|good morning|good evening|good afternoon"
-    r"|thanks|thank you|bye|goodbye|what are you|who are you)\b",
-    re.IGNORECASE,
-)
-_BARE_CHAT_RE = re.compile(
-    r"^(can you explain|could you explain|explain this|explain that"
-    r"|tell me more|help me understand|what does this mean)\s*$",
-    re.IGNORECASE,
-)
-_QUESTION_RE = re.compile(
-    r"^(what|why|how|where|when|can you|could you|do you|are you|is it"
-    r"|explain|describe|help me understand|what'?s|tell me)"
-    r"\s+(are|is|do|does|did|was|were|can|could|should|would|will|have|has|had"
-    r"|the|a|an|your|my|this|that|it|about|what|me)\b",
-    re.IGNORECASE,
-)
-_ACTION_VERBS_RE = re.compile(
-    r"\b(install|create|delete|remove|run|execute|start|stop"
-    r"|build|deploy|find|list|show|make|set|get|update|open"
-    r"|download|copy|move|rename|kill|restart|running|listening"
-    r"|using|connected|mounted|occupied)\b",
+    r"|thanks|thank you|bye|goodbye)\s*[.!?]?\s*$",
     re.IGNORECASE,
 )
 
 _CLASSIFY_SYSTEM = (
-    "You are an intent classifier for a terminal command assistant. "
-    "The user types text that is EITHER a shell command request (they want to "
-    "run something on their computer) OR a conversational message (greeting, "
-    "question about concepts, chitchat). "
+    "You are an intent classifier for a terminal command-line assistant called termai. "
+    "Users type text that is EITHER:\n"
+    "- COMMAND: anything that can be answered by running a shell command. This includes "
+    "questions phrased naturally like 'what is my location' (pwd), 'who am i' (whoami), "
+    "'what time is it' (date), 'how much disk space' (df), 'what is my ip' (curl), "
+    "'do i have a tmp dir' (ls), 'what files are here' (ls). "
+    "If it CAN be answered by running a terminal command, it is COMMAND.\n"
+    "- CHAT: greetings, philosophical questions, concept explanations, chitchat — "
+    "things that have NO possible shell command answer. Examples: 'what is the meaning "
+    "of life', 'why is the sky blue', 'explain python decorators', 'who are you', "
+    "'how are you'.\n"
     "Reply with exactly one word: COMMAND or CHAT. Nothing else."
 )
 
 
 def _classify_intent(instruction: str, model: LocalModel) -> str:
-    """Classify input as 'command' or 'chat' using regex + local AI.
+    """Classify input as 'command' or 'chat' using AI-first approach.
 
     Layer 1 — regex (instant, zero cost):
-      Greetings and bare chat phrases are caught immediately.
-      Action verbs always win — even questions like "how do I install X"
-      are command requests in a terminal assistant context.
-      Pure questions without action verbs are treated as chat.
-    Layer 2 — local AI (smart, ~200ms):
-      Truly ambiguous inputs (no action verbs, no question patterns)
-      are sent to the local model for a one-word verdict.
+      Only obvious standalone greetings are caught without AI.
+    Layer 2 — local AI (primary classifier):
+      Everything else is sent to the local model for classification.
+      The AI understands terminal context and can distinguish
+      'who am i' (whoami) from 'who are you' (chat).
     Fallback:
-      If no model is available, default to 'command' so the user isn't blocked.
+      If no model is available, default to 'command' so the user
+      isn't blocked.
     """
     text = instruction.strip()
 
     if _GREETING_RE.search(text):
-        return "chat"
-    if _BARE_CHAT_RE.search(text):
-        return "chat"
-
-    if _ACTION_VERBS_RE.search(text):
-        return "command"
-
-    if _QUESTION_RE.search(text):
         return "chat"
 
     if model.is_available:
@@ -115,11 +94,18 @@ def generate_command(instruction: str, ctx: "SessionContext") -> str | None:
     """Convert a natural language instruction into a shell command.
 
     Flow:
-    0. Detect conversational input and redirect to --chat
-    1. Try local generation (LLM or keyword fallback)
-    2. If remote AI is configured, classify complexity
-    3. Delegate to remote if complex; fall back to local on remote failure
+    0. Check session cache for a previously successful command
+    1. Detect conversational input and redirect to --chat
+    2. Try local generation (LLM or keyword fallback)
+    3. If remote AI is configured, classify complexity
+    4. Delegate to remote if complex; fall back to local on remote failure
     """
+    from termai.session import find_cached_command
+    cached = find_cached_command(instruction)
+    if cached:
+        print(f"  {DIM}(cached){RESET}")
+        return cached
+
     model = _get_model()
 
     intent = _classify_intent(instruction, model)
@@ -207,20 +193,57 @@ def _generate_with_remote(
         return local_result
 
 
+_ENDOFTEXT_RE = re.compile(r"<\|endoftext\|>.*", re.DOTALL)
+_FENCE_RE = re.compile(r"```(?:bash|sh|zsh|shell)?\s*\n?(.*?)\n?```", re.DOTALL)
+_JUNK_MARKERS = re.compile(
+    r"^(Answer:|Note:|Explanation:|Warning:|---"
+    r"|[A-D]\.\s|#\s|//\s|\*\s|- [A-Z])",
+)
+
+
 def _clean_model_output(raw: str) -> str:
-    """Strip markdown fences, leading $, and excess whitespace."""
+    """Extract only the shell command from model output.
+
+    Handles common failure modes of small local LLMs:
+    - Markdown code fences
+    - Leading $ prompts
+    - <|endoftext|> tokens followed by hallucinated text
+    - Explanatory prose mixed in with the command
+    - Multi-paragraph responses where only line 1 is the command
+    """
     text = raw.strip()
 
-    fence_pattern = re.compile(r"^```(?:bash|sh|zsh)?\s*\n?(.*?)\n?```$", re.DOTALL)
-    m = fence_pattern.match(text)
+    text = _ENDOFTEXT_RE.sub("", text).strip()
+
+    m = _FENCE_RE.search(text)
     if m:
         text = m.group(1).strip()
 
     if text.startswith("$ "):
         text = text[2:]
 
-    lines = [ln for ln in text.splitlines() if not ln.startswith("#")]
-    return "\n".join(lines).strip()
+    clean_lines: list[str] = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            if clean_lines:
+                break
+            continue
+        if _JUNK_MARKERS.match(line):
+            break
+        if line.startswith("#") and not line.startswith("#!"):
+            continue
+        clean_lines.append(line)
+
+    result = "\n".join(clean_lines).strip()
+
+    if not result or len(result) > 500:
+        first_line = text.splitlines()[0].strip() if text else ""
+        if first_line.startswith("$ "):
+            first_line = first_line[2:]
+        return first_line
+
+    return result
 
 
 # ---------------------------------------------------------------------------
